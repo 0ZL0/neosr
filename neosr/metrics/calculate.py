@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -11,6 +11,74 @@ from neosr.metrics.metric_util import reorder_image, to_y_channel
 from neosr.metrics.topiq import topiq
 from neosr.utils.img_util import img2tensor
 from neosr.utils.registry import METRIC_REGISTRY
+
+try:
+    import pyiqa
+except ModuleNotFoundError:
+    pyiqa = None
+
+_PYIQA_METRICS_CACHE: dict[tuple[str, bool, str, tuple[tuple[str, str], ...]], Any] = {}
+
+
+def _get_pyiqa_metric(
+    metric_name: str,
+    as_loss: bool,
+    device: str,
+    metric_kwargs: dict[str, Any],
+):
+    if pyiqa is None:
+        msg = (
+            "pyiqa is not installed. Install it with `uv pip install pyiqa` "
+            "before using calculate_pyiqa."
+        )
+        raise ImportError(msg)
+
+    key = (
+        metric_name,
+        as_loss,
+        device,
+        tuple(sorted((k, repr(v)) for k, v in metric_kwargs.items())),
+    )
+    if key not in _PYIQA_METRICS_CACHE:
+        _PYIQA_METRICS_CACHE[key] = pyiqa.create_metric(
+            metric_name, as_loss=as_loss, device=device, **metric_kwargs
+        )
+    return _PYIQA_METRICS_CACHE[key]
+
+
+def _to_pyiqa_tensor(
+    img: np.ndarray | Tensor,
+    input_order: str = "HWC",
+) -> Tensor:
+    if input_order not in {"HWC", "CHW"}:
+        msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
+        raise ValueError(msg)
+
+    if isinstance(img, Tensor):
+        tensor = img.detach()
+        if tensor.ndim == 2:
+            tensor = tensor.unsqueeze(0).unsqueeze(0)
+        elif tensor.ndim == 3:
+            if input_order == "HWC":
+                tensor = tensor.permute(2, 0, 1)
+            tensor = tensor.unsqueeze(0)
+        elif tensor.ndim == 4:
+            if input_order == "HWC":
+                tensor = tensor.permute(0, 3, 1, 2)
+        else:
+            msg = f"Unsupported tensor shape {tuple(tensor.shape)} for pyiqa metric."
+            raise ValueError(msg)
+    else:
+        img = reorder_image(img, input_order=input_order)
+        tensor = cast(
+            "Tensor",
+            img2tensor(img, bgr2rgb=True, float32=True, color=True),
+        ).unsqueeze(0)
+
+    tensor = tensor.float()
+    if tensor.max() > 1.0 or tensor.min() < 0.0:
+        tensor = tensor / 255.0
+    return torch.clamp(tensor, 0.0, 1.0)
 
 
 @METRIC_REGISTRY.register()
@@ -237,3 +305,67 @@ def calculate_topiq(
 
     loss = topiq()  # type: ignore[reportCallIssue]
     return loss.forward(img, img2)
+
+
+@METRIC_REGISTRY.register()
+def calculate_pyiqa(
+    img: np.ndarray | Tensor,
+    metric_name: str,
+    img2: np.ndarray | Tensor | None = None,
+    input_order: str = "HWC",
+    as_loss: bool = False,
+    device: str | None = None,
+    **metric_kwargs,
+) -> float:
+    """Calculate any pyiqa metric by name.
+
+    This is a generic adapter over ``pyiqa.create_metric`` and supports both
+    FR and NR models from pyiqa:
+    - FR: requires ``img`` and ``img2``.
+    - NR: only ``img`` is required.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    metric = _get_pyiqa_metric(
+        metric_name=metric_name,
+        as_loss=as_loss,
+        device=device,
+        metric_kwargs=metric_kwargs,
+    )
+    metric_mode = getattr(metric, "metric_mode", None)
+
+    target = _to_pyiqa_tensor(img, input_order=input_order).to(device)
+    if metric_mode == "FR":
+        if img2 is None:
+            msg = (
+                f"pyiqa metric '{metric_name}' is FR and requires a reference "
+                "image (img2), but none was provided."
+            )
+            raise ValueError(msg)
+        ref = _to_pyiqa_tensor(img2, input_order=input_order).to(device)
+        score = metric(target, ref)
+    elif metric_mode == "NR":
+        if img2 is None:
+            score = metric(target)
+        else:
+            # Some NR metrics can still consume optional secondary inputs.
+            ref = _to_pyiqa_tensor(img2, input_order=input_order).to(device)
+            score = metric(target, ref)
+    else:
+        # Fallback for metrics that do not expose metric_mode.
+        if img2 is None:
+            score = metric(target)
+        else:
+            ref = _to_pyiqa_tensor(img2, input_order=input_order).to(device)
+            score = metric(target, ref)
+
+    if isinstance(score, tuple):
+        score = score[0]
+
+    if isinstance(score, Tensor):
+        score = score.detach()
+        if score.numel() > 1:
+            score = score.mean()
+        return float(score.item())
+    return float(score)

@@ -1,7 +1,8 @@
+import os
 from pathlib import Path
 from typing import Any
 
-from neosr.utils import scandir
+from neosr.utils import get_root_logger, scandir
 
 
 def paired_paths_from_lmdb(folders: list[str], keys: list[str]) -> list[str]:
@@ -154,11 +155,11 @@ def paired_paths_from_folder(
     input_folder, gt_folder = folders
     input_key, gt_key = keys
 
-    input_paths = [
+    input_paths = {
         path
         for path in scandir(input_folder, recursive=True, full_path=True)
         if path.lower().endswith(extensions)
-    ]
+    }
     gt_paths = [
         path
         for path in scandir(gt_folder, recursive=True, full_path=True)
@@ -170,9 +171,31 @@ def paired_paths_from_folder(
         f"{len(input_paths)}, {len(gt_paths)}."
     )
     paths: list[dict[str, str]] = []
+    
+    # flag to log warning only once
+    warned = False
+    logger = get_root_logger()
+
     for gt_path in gt_paths:
         input_path = gt_path.replace(gt_folder, input_folder)
-        assert input_path in input_paths, f"{input_path} is not in {input_key}_paths."
+        
+        if input_path not in input_paths:
+            # Check for common scale suffixes
+            found_suffix = False
+            root, ext = os.path.splitext(input_path)
+            for scale in [2, 3, 4, 8]:
+                candidate = f"{root}x{scale}{ext}"
+                if candidate in input_paths:
+                    if not warned:
+                        logger.warning(f"Constructed input path {input_path} not found. Found {candidate} instead. Will use suffix match for dataset.")
+                        warned = True
+                    input_path = candidate
+                    found_suffix = True
+                    break
+            
+            if not found_suffix:
+                assert input_path in input_paths, f"{input_path} is not in {input_key}_paths."
+
         paths.append({f"{input_key}_path": input_path, f"{gt_key}_path": gt_path})
     return paths
 

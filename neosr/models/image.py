@@ -233,6 +233,14 @@ class image(base):
         else:
             self.cri_dists = None
 
+        # pyiqa loss
+        if train_opt.get("pyiqa_opt"):
+            self.cri_pyiqa = build_loss(train_opt["pyiqa_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
+                self.device, memory_format=torch.channels_last, non_blocking=True
+            )
+        else:
+            self.cri_pyiqa = None
+
         # gan loss
         if train_opt.get("gan_opt"):
             self.cri_gan = build_loss(train_opt["gan_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
@@ -279,9 +287,17 @@ class image(base):
 
         # error handling
         optim_d = self.opt["train"].get("optim_d", None)
-        pix_losses_bool = self.cri_pix or self.cri_mssim is not None
-        percep_losses_bool = (
-            self.cri_perceptual or self.cri_dists or self.cri_fdl is not None
+        pix_losses_bool = any(
+            loss is not None for loss in (self.cri_pix, self.cri_mssim)
+        )
+        percep_losses_bool = any(
+            loss is not None
+            for loss in (
+                self.cri_perceptual,
+                self.cri_dists,
+                self.cri_pyiqa,
+                self.cri_fdl,
+            )
         )
 
         if self.sam is not None and self.use_amp is True:
@@ -579,6 +595,11 @@ class image(base):
                 l_g_dists = self.cri_dists(self.output, self.gt)
                 l_g_total += l_g_dists
                 loss_dict["l_g_dists"] = l_g_dists
+            # pyiqa loss
+            if self.cri_pyiqa:
+                l_g_pyiqa = self.cri_pyiqa(self.output, self.gt)
+                l_g_total += l_g_pyiqa
+                loss_dict["l_g_pyiqa"] = l_g_pyiqa
             # ldl loss
             if self.cri_ldl:
                 l_g_ldl = self.cri_ldl(self.output, self.gt)
@@ -840,10 +861,7 @@ class image(base):
         # progress bar
         use_pbar = self.opt["val"].get("pbar", True)
 
-        if dataset_type == "single":
-            with_metrics = False
-        else:
-            with_metrics = self.opt["val"].get("metrics") is not None
+        with_metrics = self.opt["val"].get("metrics") is not None
 
         if with_metrics:
             if not hasattr(self, "metric_results"):  # only execute in the first run
@@ -861,9 +879,9 @@ class image(base):
                 total=len(dataloader), unit="image", colour="green", ascii=" >="
             )
 
-        metric_data = {}
-
-        for _idx, val_data in enumerate(dataloader):
+        num_samples = 0
+        for val_data in dataloader:
+            num_samples += 1
             img_name = Path(val_data["lq_path"][0]).stem
             self.feed_data(val_data)
 
@@ -888,7 +906,7 @@ class image(base):
 
             visuals = self.get_current_visuals()
             sr_img = tensor2img([visuals["result"]])
-            metric_data["img"] = sr_img
+            metric_data = {"img": sr_img}
             if "gt" in visuals:
                 gt_img = tensor2img([visuals["gt"]])
                 metric_data["img2"] = gt_img
@@ -945,7 +963,19 @@ class image(base):
                 # calculate metrics
                 for name, opt_ in self.opt["val"]["metrics"].items():
                     with torch.no_grad():
-                        self.metric_results[name] += calculate_metric(metric_data, opt_)  # type: ignore[reportOperatorIssue]
+                        try:
+                            self.metric_results[name] += calculate_metric(  # type: ignore[reportOperatorIssue]
+                                metric_data, opt_
+                            )
+                        except Exception as exc:
+                            if dataset_type == "single":
+                                msg = (
+                                    f"Metric '{name}' failed for dataset type 'single'. "
+                                    "Use NR metrics (e.g. calculate_pyiqa with an NR metric_name) "
+                                    "or provide GT with dataset type 'paired'."
+                                )
+                                raise ValueError(msg) from exc
+                            raise
             if use_pbar:
                 pbar.update(1)  # type: ignore[reportPossiblyUnboundVariable]
                 pbar.set_description(f"{tc.light_green}Inferring on {img_name}{tc.end}")  # type: ignore[reportPossiblyUnboundVariable]
@@ -955,7 +985,7 @@ class image(base):
 
         if with_metrics:
             for metric in self.metric_results:
-                self.metric_results[metric] /= _idx + 1  # type: ignore[reportPossiblyUnboundVariable]
+                self.metric_results[metric] /= num_samples
                 # update the best metric result
                 self._update_best_metric_result(
                     dataset_name, metric, self.metric_results[metric], current_iter

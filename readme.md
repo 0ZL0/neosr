@@ -7,6 +7,8 @@ Join our <a href="https://discord.gg/NN2HGtJ3d6">Discord</a>
 
 [neosr](https://github.com/neosr-project/neosr) is an open-source framework for training super-resolution models. It provides a comprehensive and reproducible environment for achieving state-of-the-art image restoration results, making it suitable for both the enthusiastic community, professionals and machine learning academic researchers. It serves as a versatile platform and aims to bridge the gap between practical application and academic research in the field.
 
+**THIS IS JUST A DEBUG FORK. NOT OFFICIAL!!**
+
 - **Accessible**: implements a wide range of the latest advancements in single-image super-resolution networks, losses, optimizers and augmentations. Users can easily explore, adapt and experiment with various configurations for their specific needs, even without coding skills.
 
 - **Efficient**: optimized for faster training iterations, quicker convergence and low GPU requirements, making it the most efficient choice for both research and practical use cases.
@@ -157,6 +159,8 @@ Where `config.toml` is a configuration file. Templates can be found in [options]
 | [LDL Loss](https://github.com/csjliang/LDL)                            							| `ldl_opt`, `ldl_loss` 	             |
 | [Focal Frequency](https://github.com/EndlessSora/focal-frequency-loss) 							| `ff_opt`, `ff_loss`             	     |
 | [DISTS](https://github.com/dingkeyan93/DISTS)				 							| `dists_opt`, `dists_loss`		     |
+| [pyiqa](https://github.com/chaofengc/IQA-PyTorch) (wrapper for 10+ FR/NR metrics)						| `pyiqa_opt`, `pyiqa_loss`		     |
+<!-- Note: For pyiqa, you MUST specify 'metric_name' in your config (e.g. metric_name = "lpips") -->
 | [Wavelet Guided](https://github.com/mandalinadagi/WGSR)		 							| `wavelet_guided`			     |
 | [Perceptual Patch Loss](https://github.com/Suanmd/Patch-Loss-for-Super-Resolution)						| `perceptual_opt`, `patchloss`, `ipk`	     |
 | [Consistency Loss](https://github.com/neosr-project/neosr/wiki/Losses#consistency_opt-consistency_loss) (Oklab and CIE L*)	| `consistency_opt`, `consistency_loss`	     |
@@ -172,6 +176,8 @@ Where `config.toml` is a configuration file. Templates can be found in [options]
 | SSIM 						    | `calculate_ssim`  |
 | [DISTS](https://github.com/dingkeyan93/DISTS)     | `calculate_dists` |
 | [TOPIQ](https://github.com/chaofengc/IQA-PyTorch) | `calculate_topiq` |
+| [pyiqa](https://github.com/chaofengc/IQA-PyTorch) (wrapper for 10+ FR/NR metrics) | `calculate_pyiqa` |
+<!-- Note: For pyiqa, you MUST specify 'metric_name' in your config -->
 
 ### [supported augmentations](https://github.com/neosr-project/neosr/wiki/Configuration-Walkthrough#augmentations-aug_prob):
 

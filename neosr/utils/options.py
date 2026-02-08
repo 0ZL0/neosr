@@ -198,7 +198,7 @@ def parse_options(
             torch.utils.deterministic.fill_uninitialized_memory = False
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.benchmark_limit = 0
-            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
         else:
             # Determinism
             opt["deterministic"] = True

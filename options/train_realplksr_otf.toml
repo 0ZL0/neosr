@@ -81,6 +81,10 @@ val_freq = 1000
 #better = "lower"
 #[val.metrics.topiq]
 #type = "calculate_topiq"
+#[val.metrics.lpips]
+#type = "calculate_pyiqa"
+#metric_name = "lpips"
+#better = "lower"
 
 [path]
 #pretrain_network_g = 'experiments\pretrain_g.pth'
@@ -170,6 +174,11 @@ loss_weight = 0.3
 
 #[train.kl_opt]
 #type = "kl_loss"
+#loss_weight = 1.0
+
+#[train.pyiqa_opt]
+#type = "pyiqa_loss"
+#metric_name = "lpips"
 #loss_weight = 1.0
 
 [logger]
