@@ -101,7 +101,7 @@ class paired(data.Dataset):
                 **self.io_backend_opt,
             )
 
-        # Load gt and lq images. Dimension order: HWC; channel order: BGR;
+        # Load gt and lq images. Dimension order: HWC; channel order: RGB;
         # image range: [0, 1], float32.
         gt_path = self.paths[index]["gt_path"]  # type: ignore[index]
         img_bytes = self.file_client.get(gt_path, "gt")  # type: ignore[attr-defined]
@@ -158,9 +158,9 @@ class paired(data.Dataset):
         if self.opt["phase"] != "train":
             img_gt = img_gt[0 : img_lq.shape[0] * scale, 0 : img_lq.shape[1] * scale, :]  # type: ignore[index,union-attr,call-overload]
 
-        # BGR to RGB, HWC to CHW, numpy to tensor
+        # RGB HWC to CHW, numpy to tensor
         img_gt, img_lq = img2tensor(
-            [img_gt, img_lq], bgr2rgb=True, float32=True, color=self.color
+            [img_gt, img_lq], bgr2rgb=False, float32=True, color=self.color
         )
 
         # normalize

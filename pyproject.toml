@@ -19,6 +19,7 @@ classifiers = [
 
 dependencies = [
     "einops>=0.8.1",
+    "imagecodecs>=2026.1.14",
     "lmdb>=1.6.2",
     "numpy>=2.2.6",
     "onnx>=1.18.0",

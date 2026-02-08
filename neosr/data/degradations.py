@@ -699,7 +699,7 @@ def generate_poisson_noise(img, scale=1.0, gray_noise=False):
 
     """
     if gray_noise:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     # round and clip image for counting vals correctly
     img = np.clip((img * 255.0).round(), 0, 255) / 255.0
     vals = len(np.unique(img))
@@ -886,8 +886,12 @@ def add_jpg_compression(img, quality=90):
     """
     img = np.clip(img, 0, 1)
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
-    _, encimg = cv2.imencode(".jpg", img * 255.0, encode_param)
-    return np.float32(cv2.imdecode(encimg, 1)) / 255.0
+    bgr = cv2.cvtColor((img * 255.0).astype(np.float32), cv2.COLOR_RGB2BGR)
+    bgr = np.clip(np.round(bgr), 0, 255).astype(np.uint8)
+    _, encimg = cv2.imencode(".jpg", bgr, encode_param)
+    decoded_bgr = cv2.imdecode(encimg, cv2.IMREAD_COLOR)
+    decoded_rgb = cv2.cvtColor(decoded_bgr, cv2.COLOR_BGR2RGB)
+    return np.float32(decoded_rgb) / 255.0
 
 
 def random_add_jpg_compression(img, quality_range=(90, 100)):

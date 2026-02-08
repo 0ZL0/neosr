@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import cv2
+import imagecodecs
 import numpy as np
 import torch
 from numpy.typing import ArrayLike, DTypeLike
@@ -12,7 +13,7 @@ from torchvision.utils import make_grid
 
 def img2tensor(
     imgs: np.ndarray | ArrayLike | list[np.ndarray | ArrayLike],
-    bgr2rgb: bool = True,
+    bgr2rgb: bool = False,
     float32: bool = True,
     color: bool = True,
 ) -> list[Tensor] | Tensor:
@@ -24,6 +25,7 @@ def img2tensor(
         color (bool): use RGB if true, transform to Grayscale
             if False. Default: True
         bgr2rgb (bool): Whether to change bgr to rgb.
+            Keep False when input arrays are already in RGB order.
         float32 (bool): Whether to change to float32.
 
     Returns:
@@ -41,11 +43,24 @@ def img2tensor(
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img = torch.from_numpy(img.transpose(2, 0, 1))
         else:
-            if img.shape[2] == 3 and bgr2rgb:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            if img.ndim == 2:
+                gray = img
+            elif img.ndim == 3:
+                channels = img.shape[2]
+                if channels == 1:
+                    gray = img[..., 0]
+                elif channels >= 3:
+                    if bgr2rgb:
+                        gray = cv2.cvtColor(img[..., :3], cv2.COLOR_BGR2GRAY)
+                    else:
+                        gray = cv2.cvtColor(img[..., :3], cv2.COLOR_RGB2GRAY)
+                else:
+                    msg = f"Unsupported channel count for grayscale conversion: {channels}"
+                    raise ValueError(msg)
             else:
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            img = torch.from_numpy(img[None, ...])
+                msg = f"Unsupported image ndim for grayscale conversion: {img.ndim}"
+                raise ValueError(msg)
+            img = torch.from_numpy(gray[None, ...])
 
         if float32:
             img = img.float()
@@ -59,7 +74,7 @@ def img2tensor(
 
 def tensor2img(
     tensor: Tensor | list[Tensor],
-    rgb2bgr: bool = True,
+    rgb2bgr: bool = False,
     out_type: DTypeLike = np.uint8,
     min_max: tuple[int, int] = (0, 1),
 ) -> list[np.ndarray] | np.ndarray:
@@ -74,6 +89,7 @@ def tensor2img(
             3) 2D Tensor of shape (H x W).
             Tensor channel should be in RGB order.
         rgb2bgr (bool): Whether to change rgb to bgr.
+            Keep False to output RGB arrays.
         out_type (numpy type): output types. If ``np.uint8``, transform outputs
             to uint8 type with range [0, 255]; otherwise, float type with
             range [0, 1]. Default: ``np.uint8``.
@@ -81,7 +97,7 @@ def tensor2img(
 
     Returns:
         (Tensor or list): 3D ndarray of shape (H x W x C) OR 2D ndarray of
-        shape (H x W). The channel order is BGR.
+        shape (H x W). The channel order is RGB.
     """
     if not (
         torch.is_tensor(tensor)
@@ -130,7 +146,7 @@ def tensor2img(
 
 
 def tensor2img_fast(
-    tensor, rgb2bgr: bool = True, min_max: tuple[int, int] = (0, 1)
+    tensor, rgb2bgr: bool = False, min_max: tuple[int, int] = (0, 1)
 ) -> ArrayLike:
     """This implementation is slightly faster than tensor2img.
     It now only supports torch tensor with shape (1, c, h, w).
@@ -138,7 +154,7 @@ def tensor2img_fast(
     Args:
     ----
         tensor (Tensor): Now only support torch tensor with (1, c, h, w).
-        rgb2bgr (bool): Whether to change rgb to bgr. Default: True.
+        rgb2bgr (bool): Whether to change rgb to bgr. Default: False.
         min_max (tuple[int]): min and max values for clamp.
 
     """
@@ -166,15 +182,57 @@ def imfrombytes(
     Returns:
     -------
         ndarray: Loaded image array.
+            For color images, channel order is RGB.
 
     """
-    img_np = np.frombuffer(content, np.uint8)
-    imread_flags = {
-        "color": cv2.IMREAD_COLOR,
-        "grayscale": cv2.IMREAD_GRAYSCALE,
-        "unchanged": cv2.IMREAD_UNCHANGED,
-    }
-    img = cv2.imdecode(img_np, imread_flags[flag])
+    if flag not in {"color", "grayscale", "unchanged"}:
+        msg = f"Unsupported flag: {flag}. Expected one of color/grayscale/unchanged."
+        raise ValueError(msg)
+
+    img = imagecodecs.imread(content)
+    if img is None:
+        msg = "imagecodecs failed to decode image bytes."
+        raise ValueError(msg)
+
+    if flag == "color":
+        if img.ndim == 2:
+            img = np.repeat(img[:, :, None], 3, axis=2)
+        elif img.ndim == 3:
+            channels = img.shape[2]
+            if channels == 1:
+                img = np.repeat(img, 3, axis=2)
+            elif channels == 3:
+                img = np.ascontiguousarray(img)  # keep RGB
+            elif channels >= 4:
+                img = np.ascontiguousarray(img[..., :3])  # RGBA -> RGB
+            else:
+                msg = f"Unsupported channel count for color decode: {channels}"
+                raise ValueError(msg)
+        else:
+            msg = f"Unsupported ndim for color decode: {img.ndim}"
+            raise ValueError(msg)
+
+    elif flag == "grayscale":
+        if img.ndim == 2:
+            pass
+        elif img.ndim == 3:
+            channels = img.shape[2]
+            if channels == 1:
+                img = np.ascontiguousarray(img[..., 0])
+            elif channels == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            elif channels >= 4:
+                img = cv2.cvtColor(img[..., :4], cv2.COLOR_RGBA2GRAY)
+            else:
+                msg = f"Unsupported channel count for grayscale decode: {channels}"
+                raise ValueError(msg)
+        else:
+            msg = f"Unsupported ndim for grayscale decode: {img.ndim}"
+            raise ValueError(msg)
+
+    else:  # unchanged
+        img = np.ascontiguousarray(img)
+
     if float32:
         img = img.astype(np.float32) / 255.0
     return img
@@ -190,7 +248,7 @@ def imwrite(
 
     Args:
     ----
-        img (ndarray): Image array to be written.
+        img (ndarray): Image array to be written. Color inputs are expected in RGB order.
         file_path (str): Image file path.
         params (None or list): Same as opencv's :func:`imwrite` interface.
         auto_mkdir (bool): If the parent folder of `file_path` does not exist,
@@ -205,7 +263,14 @@ def imwrite(
         dir_name = Path(Path(file_path).parent).resolve()
         Path(dir_name).mkdir(parents=True, exist_ok=True)
     try:
-        cv2.imencode(Path(file_path).suffix, img, params or [])[1].tofile(file_path)
+        to_encode = img
+        if img.ndim == 3:
+            channels = img.shape[2]
+            if channels == 3:
+                to_encode = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            elif channels == 4:
+                to_encode = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
+        cv2.imencode(Path(file_path).suffix, to_encode, params or [])[1].tofile(file_path)
     except:
         msg = "Failed to write images."
         raise OSError(msg)

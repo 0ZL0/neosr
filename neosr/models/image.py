@@ -905,10 +905,10 @@ class image(base):
                 self.optimizer_g.train()
 
             visuals = self.get_current_visuals()
-            sr_img = tensor2img([visuals["result"]])
+            sr_img = tensor2img([visuals["result"]], rgb2bgr=False)
             metric_data = {"img": sr_img}
             if "gt" in visuals:
-                gt_img = tensor2img([visuals["gt"]])
+                gt_img = tensor2img([visuals["gt"]], rgb2bgr=False)
                 metric_data["img2"] = gt_img
                 del self.gt
 
@@ -944,7 +944,7 @@ class image(base):
                     save_lq_img_path = Path(v_folder) / img_name / f"{img_name}_lq.png"
 
                     if not Path.exists(save_lq_img_path):
-                        original_lq = tensor2img([visuals["lq"]])
+                        original_lq = tensor2img([visuals["lq"]], rgb2bgr=False)
                         imwrite(original_lq, str(save_lq_img_path))
 
             # check for dataset option save_tb, to save images on tb_logger

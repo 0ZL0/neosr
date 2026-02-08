@@ -76,8 +76,8 @@ class single(data.Dataset):
         except AttributeError:
             raise AttributeError(lq_path)
 
-        # BGR to RGB, HWC to CHW, numpy to tensor
-        img_lq = img2tensor(img_lq, bgr2rgb=True, float32=True, color=self.color)
+        # RGB HWC to CHW, numpy to tensor
+        img_lq = img2tensor(img_lq, bgr2rgb=False, float32=True, color=self.color)
         # normalize
         if self.mean is not None or self.std is not None:
             normalize(img_lq, self.mean, self.std, inplace=True)  # type: ignore[reportAssignmentType]

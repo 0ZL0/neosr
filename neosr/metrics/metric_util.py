@@ -1,6 +1,6 @@
 import numpy as np
 
-from neosr.utils import bgr2ycbcr
+from neosr.utils import rgb2ycbcr
 
 
 def reorder_image(img: np.ndarray, input_order: str = "HWC") -> np.ndarray:
@@ -37,7 +37,7 @@ def to_y_channel(img: np.ndarray) -> np.ndarray:
 
     Args:
     ----
-        img (ndarray): Images with range [0, 255].
+        img (ndarray): Images with range [0, 255] in RGB order.
 
     Returns:
     -------
@@ -46,6 +46,6 @@ def to_y_channel(img: np.ndarray) -> np.ndarray:
     """
     img = img.astype(np.float32) / 255.0
     if img.ndim == 3 and img.shape[2] == 3:
-        img = bgr2ycbcr(img, y_only=True)
+        img = rgb2ycbcr(img, y_only=True)
         img = img[..., None]
     return img * 255.0

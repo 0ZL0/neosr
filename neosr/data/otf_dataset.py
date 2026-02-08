@@ -134,7 +134,7 @@ class otf(data.Dataset):
             )
 
         # -------------------------------- Load gt images -------------------------------- #
-        # Shape: (h, w, c); channel order: BGR; image range: [0, 1], float32.
+        # Shape: (h, w, c); channel order: RGB; image range: [0, 1], float32.
         gt_path = self.paths[index]
         # avoid errors caused by high latency in reading files
         retry = 3
@@ -250,8 +250,8 @@ class otf(data.Dataset):
         else:
             sinc_kernel = self.pulse_tensor
 
-        # BGR to RGB, HWC to CHW, numpy to tensor
-        img_gt = img2tensor([img_gt], bgr2rgb=True, float32=True, color=self.color)[0]  # type: ignore[reportArgumentType,arg-type]
+        # RGB HWC to CHW, numpy to tensor
+        img_gt = img2tensor([img_gt], bgr2rgb=False, float32=True, color=self.color)[0]  # type: ignore[reportArgumentType,arg-type]
         # NOTE: using torch.tensor(device='cuda') won't work.
         # Keeping old constructor for now.
         kernel = torch.FloatTensor(kernel)

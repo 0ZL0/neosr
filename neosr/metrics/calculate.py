@@ -72,7 +72,7 @@ def _to_pyiqa_tensor(
         img = reorder_image(img, input_order=input_order)
         tensor = cast(
             "Tensor",
-            img2tensor(img, bgr2rgb=True, float32=True, color=True),
+            img2tensor(img, bgr2rgb=False, float32=True, color=True),
         ).unsqueeze(0)
 
     tensor = tensor.float()
@@ -256,7 +256,9 @@ def calculate_dists(
     )
 
     # satisfy mypy
-    img, img2 = cast("Tensor", img2tensor([img, img2]))
+    img, img2 = cast(
+        "Tensor", img2tensor([img, img2], bgr2rgb=False, float32=True, color=True)
+    )
     # normalize to [0, 1]
     img, img2 = img / 255, img2 / 255
     # add dim
@@ -293,7 +295,9 @@ def calculate_topiq(
     )
 
     # satisfy mypy
-    img, img2 = cast("Tensor", img2tensor([img, img2]))
+    img, img2 = cast(
+        "Tensor", img2tensor([img, img2], bgr2rgb=False, float32=True, color=True)
+    )
     # normalize to [0, 1]
     img, img2 = img / 255, img2 / 255
     # add dim
