@@ -225,13 +225,7 @@ class image(base):
         else:
             self.cri_perceptual = None
 
-        # dists loss
-        if train_opt.get("dists_opt"):
-            self.cri_dists = build_loss(train_opt["dists_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_dists = None
+
 
         # pyiqa loss
         if train_opt.get("pyiqa_opt"):
@@ -294,7 +288,6 @@ class image(base):
             loss is not None
             for loss in (
                 self.cri_perceptual,
-                self.cri_dists,
                 self.cri_pyiqa,
                 self.cri_fdl,
             )
@@ -590,11 +583,7 @@ class image(base):
                 l_g_percep = self.cri_perceptual(self.output, self.gt)
                 l_g_total += l_g_percep
                 loss_dict["l_g_percep"] = l_g_percep
-            # dists loss
-            if self.cri_dists:
-                l_g_dists = self.cri_dists(self.output, self.gt)
-                l_g_total += l_g_dists
-                loss_dict["l_g_dists"] = l_g_dists
+
             # pyiqa loss
             if self.cri_pyiqa:
                 l_g_pyiqa = self.cri_pyiqa(self.output, self.gt)

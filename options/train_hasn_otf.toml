@@ -157,8 +157,9 @@ loss_weight = 0.3
 ##ipk = true
 ##patch_weight = 1.0
 
-#[train.dists_opt]
-#type = "dists_loss"
+#[train.pyiqa_opt]
+#type = "pyiqa_loss"
+metric_name = "dists"
 #loss_weight = 0.5
 
 #[train.ff_opt]

@@ -6,9 +6,7 @@ import torch
 from cv2.typing import MatLike
 from torch import Tensor
 
-from neosr.losses.dists_loss import dists_loss
 from neosr.metrics.metric_util import reorder_image, to_y_channel
-from neosr.metrics.topiq import topiq
 from neosr.utils.img_util import img2tensor
 from neosr.utils.registry import METRIC_REGISTRY
 
@@ -233,78 +231,7 @@ def calculate_ssim(
     return ssim_result
 
 
-@METRIC_REGISTRY.register()
-def calculate_dists(
-    img: np.ndarray | Tensor,
-    img2: np.ndarray | Tensor,
-    **kwargs,  # noqa: ARG001
-) -> float:
-    """Calculates DISTS metric.
 
-    Args:
-    ----
-        img (np.ndarray): Images with range [0, 255] with order 'HWC'.
-        img2 (np.ndarray): Images with range [0, 255] with order 'HWC'.
-
-    Returns:
-    -------
-        float: SSIM result.
-
-    """
-    assert img.shape == img2.shape, (
-        f"Image shapes are different: {img.shape}, {img2.shape}."
-    )
-
-    # satisfy mypy
-    img, img2 = cast("Tensor", img2tensor([img, img2]))
-    # normalize to [0, 1]
-    img, img2 = img / 255, img2 / 255
-    # add dim
-    if isinstance(img, Tensor) and isinstance(img2, Tensor):
-        img, img2 = img.unsqueeze_(0), img2.unsqueeze_(0)
-        # to cuda
-        device = torch.device("cuda")
-        img, img2 = img.to(device), img2.to(device)
-
-    loss = dists_loss(as_loss=False)  # type: ignore[reportCallIssue]
-    return loss.forward(img, img2)
-
-
-@METRIC_REGISTRY.register()
-def calculate_topiq(
-    img: np.ndarray | Tensor,
-    img2: np.ndarray | Tensor,
-    **kwargs,  # noqa: ARG001
-) -> float:
-    """Calculates TOPIQ metric.
-
-    Args:
-    ----
-        img (np.ndarray): Images with range [0, 255] with order 'HWC'.
-        img2 (np.ndarray): Images with range [0, 255] with order 'HWC'.
-
-    Returns:
-    -------
-        float: SSIM result.
-
-    """
-    assert img.shape == img2.shape, (
-        f"Image shapes are different: {img.shape}, {img2.shape}."
-    )
-
-    # satisfy mypy
-    img, img2 = cast("Tensor", img2tensor([img, img2]))
-    # normalize to [0, 1]
-    img, img2 = img / 255, img2 / 255
-    # add dim
-    if isinstance(img, Tensor) and isinstance(img2, Tensor):
-        img, img2 = img.unsqueeze_(0), img2.unsqueeze_(0)
-        # to cuda
-        device = torch.device("cuda")
-        img, img2 = img.to(device), img2.to(device)
-
-    loss = topiq()  # type: ignore[reportCallIssue]
-    return loss.forward(img, img2)
 
 
 @METRIC_REGISTRY.register()
