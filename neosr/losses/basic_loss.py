@@ -2,6 +2,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from neosr.utils.namespaces import normalize_native_criterion
 from neosr.utils.registry import LOSS_REGISTRY
 
 _reduction_modes: list[str] = ["none", "mean", "sum"]
@@ -154,7 +155,7 @@ class chc_loss(nn.Module):
         self,
         loss_weight: float = 1.0,
         reduction: str = "mean",
-        criterion: str = "huber",
+        criterion: str = "native:huber",
         loss_lambda: float = 0,
         clip_min: float = 0.003921,
         clip_max: float = 0.996078,
@@ -167,7 +168,7 @@ class chc_loss(nn.Module):
 
         # Loss params
         self.loss_weight = loss_weight
-        self.criterion = criterion
+        self.criterion = normalize_native_criterion(criterion)
 
         # CoSim
         self.similarity = nn.CosineSimilarity(dim=1, eps=1e-20)

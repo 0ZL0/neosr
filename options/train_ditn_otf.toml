@@ -72,18 +72,21 @@ dataroot_lq = 'C:\datasets\val\lq\'
 [val]
 val_freq = 1000
 #tile = 200
-#[val.metrics.psnr]
-#type = "calculate_psnr"
-#[val.metrics.ssim]
-#type = "calculate_ssim"
-#[val.metrics.dists]
-#type = "calculate_dists"
+#[[val.metrics]]
+#name = "psnr"
+#type = "native:psnr"
+#better = "higher"
+#[[val.metrics]]
+#name = "ssim"
+#type = "native:ssim"
+#better = "higher"
+#[[val.metrics]]
+#name = "dists"
+#type = "pyiqa:dists"
 #better = "lower"
-#[val.metrics.topiq]
-#type = "calculate_topiq"
-#[val.metrics.lpips]
-#type = "calculate_pyiqa"
-#metric_name = "lpips"
+#[[val.metrics]]
+#name = "lpips"
+#type = "pyiqa:lpips"
 #better = "lower"
 
 [path]
@@ -123,61 +126,71 @@ schedule_free = true
 warmup_steps = 600
 
 #  losses
-[train.mssim_opt]
-type = "mssim_loss"
-loss_weight = 1.0
+[[train.losses]]
+name = "mssim"
+type = "neosr:mssim"
+weight = 1.0
 
-[train.consistency_opt]
-type = "consistency_loss"
-loss_weight = 1.0
+[[train.losses]]
+name = "consistency"
+type = "neosr:consistency"
+weight = 1.0
 
-[train.ldl_opt]
-type = "ldl_loss"
-loss_weight = 1.0
+[[train.losses]]
+name = "ldl"
+type = "neosr:ldl"
+weight = 1.0
 
-[train.fdl_opt]
-type = "fdl_loss"
+[[train.losses]]
+name = "fdl_dinov2"
+type = "neosr:fdl"
 model = "dinov2" # "vgg", "resnet", "effnet"
-loss_weight = 0.75
+weight = 0.75
 
-[train.gan_opt]
-type = "gan_loss"
+[[train.losses]]
+name = "gan_bce"
+type = "neosr:gan"
 gan_type = "bce"
-loss_weight = 0.3
+weight = 0.3
 
-#[train.msswd_opt]
-#type = "msswd_loss"
-#loss_weight = 1.0
+#[[train.losses]]
+#name = "msswd"
+#type = "neosr:msswd"
+#weight = 1.0
 
-#[train.perceptual_opt]
-#type = "vgg_perceptual_loss"
-#loss_weight = 0.5
-#criterion = "huber"
+#[[train.losses]]
+#name = "vgg_perceptual"
+#type = "neosr:vgg_perceptual"
+#weight = 0.5
+#criterion = "native:huber"
 ##patchloss = true
 ##ipk = true
 ##patch_weight = 1.0
 
-#[train.pyiqa_opt]
-#type = "pyiqa_loss"
-metric_name = "dists"
-#loss_weight = 0.5
+#[[train.losses]]
+#name = "dists"
+#type = "pyiqa:dists"
+#weight = 0.5
 
-#[train.ff_opt]
-#type = "ff_loss"
-#loss_weight = 0.35
+#[[train.losses]]
+#name = "ff"
+#type = "neosr:ff"
+#weight = 0.35
 
-#[train.ncc_opt]
-#type = "ncc_loss"
-#loss_weight = 1.0
+#[[train.losses]]
+#name = "ncc"
+#type = "neosr:ncc"
+#weight = 1.0
 
-#[train.kl_opt]
-#type = "kl_loss"
-#loss_weight = 1.0
+#[[train.losses]]
+#name = "kl"
+#type = "neosr:kl"
+#weight = 1.0
 
-#[train.pyiqa_opt]
-#type = "pyiqa_loss"
-#metric_name = "lpips"
-#loss_weight = 1.0
+#[[train.losses]]
+#name = "lpips"
+#type = "pyiqa:lpips"
+#weight = 1.0
 
 [logger]
 total_iter = 1000000

@@ -4,14 +4,20 @@ import random
 import sys
 import time
 import tomllib
+import warnings
+from collections import OrderedDict
+from copy import deepcopy
 from pathlib import Path, PosixPath
 from shutil import copyfile
 from typing import Any
 
 import torch
 
+from neosr.utils.namespaces import LEGACY_TRAIN_LOSS_KEYS, LEGACY_TRAIN_LOSS_NAMES
 from neosr.utils import set_random_seed, tc
 from neosr.utils.dist_util import get_dist_info, init_dist, master_only
+
+_WARNED_CONFIG_MESSAGES: set[str] = set()
 
 
 def toml_load(f) -> dict[str, Any]:
@@ -36,6 +42,118 @@ def toml_load(f) -> dict[str, Any]:
         """
         raise tomllib.TOMLDecodeError(msg)
         sys.exit(1)
+
+
+def _warn_config_once(message: str) -> None:
+    if message in _WARNED_CONFIG_MESSAGES:
+        return
+    _WARNED_CONFIG_MESSAGES.add(message)
+    warnings.warn(message, UserWarning, stacklevel=3)
+
+
+def _normalize_train_losses(opt: dict[str, Any]) -> None:
+    train_opt = opt.get("train")
+    if train_opt is None:
+        return
+
+    legacy_keys = [key for key in LEGACY_TRAIN_LOSS_KEYS if train_opt.get(key) is not None]
+    has_new_losses = train_opt.get("losses") is not None
+
+    if has_new_losses and legacy_keys:
+        msg = (
+            "Mixed legacy train loss keys and '[[train.losses]]' are not supported. "
+            "Use exactly one configuration style."
+        )
+        raise ValueError(msg)
+
+    if has_new_losses:
+        losses = train_opt["losses"]
+        if not isinstance(losses, list):
+            msg = "The 'train.losses' field must be an array of tables."
+            raise TypeError(msg)
+    else:
+        losses = []
+        for key in LEGACY_TRAIN_LOSS_KEYS:
+            legacy_opt = train_opt.pop(key, None)
+            if legacy_opt is None:
+                continue
+            _warn_config_once(
+                f"Legacy train loss key '{key}' is deprecated; migrate it to '[[train.losses]]'."
+            )
+            if not isinstance(legacy_opt, dict):
+                msg = f"Legacy train loss '{key}' must be a table."
+                raise TypeError(msg)
+            loss_entry = deepcopy(legacy_opt)
+            loss_entry.setdefault("name", LEGACY_TRAIN_LOSS_NAMES[key])
+            losses.append(loss_entry)
+        train_opt["losses"] = losses
+
+    normalized_losses: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for index, loss_opt in enumerate(train_opt.get("losses", []), start=1):
+        if not isinstance(loss_opt, dict):
+            msg = f"train.losses entry #{index} must be a table."
+            raise TypeError(msg)
+        if loss_opt.get("name") is None:
+            msg = f"train.losses entry #{index} is missing required field 'name'."
+            raise ValueError(msg)
+        name = loss_opt["name"]
+        if not isinstance(name, str):
+            msg = f"train.losses entry #{index} has a non-string 'name'."
+            raise TypeError(msg)
+        if name in seen_names:
+            msg = f"Duplicate train loss name '{name}'."
+            raise ValueError(msg)
+        seen_names.add(name)
+        normalized_losses.append(loss_opt)
+    train_opt["losses"] = normalized_losses
+
+
+def _normalize_val_metrics(opt: dict[str, Any]) -> None:
+    val_opt = opt.get("val")
+    if val_opt is None or val_opt.get("metrics") is None:
+        return
+
+    metrics = val_opt["metrics"]
+    normalized_metrics: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+    if isinstance(metrics, list):
+        for index, metric_opt in enumerate(metrics, start=1):
+            if not isinstance(metric_opt, dict):
+                msg = f"val.metrics entry #{index} must be a table."
+                raise TypeError(msg)
+            name = metric_opt.get("name")
+            if name is None:
+                msg = f"val.metrics entry #{index} is missing required field 'name'."
+                raise ValueError(msg)
+            if not isinstance(name, str):
+                msg = f"val.metrics entry #{index} has a non-string 'name'."
+                raise TypeError(msg)
+            if name in normalized_metrics:
+                msg = f"Duplicate validation metric name '{name}'."
+                raise ValueError(msg)
+            metric_cfg = deepcopy(metric_opt)
+            metric_cfg.pop("name", None)
+            normalized_metrics[name] = metric_cfg
+    elif isinstance(metrics, dict):
+        _warn_config_once(
+            "Legacy '[val.metrics.<name>]' tables are deprecated; migrate them to '[[val.metrics]]'."
+        )
+        for name, metric_opt in metrics.items():
+            if not isinstance(metric_opt, dict):
+                msg = f"Validation metric '{name}' must be a table."
+                raise TypeError(msg)
+            if name in normalized_metrics:
+                msg = f"Duplicate validation metric name '{name}'."
+                raise ValueError(msg)
+            metric_cfg = deepcopy(metric_opt)
+            metric_cfg.pop("name", None)
+            normalized_metrics[name] = metric_cfg
+    else:
+        msg = "The 'val.metrics' field must be an array of tables or a metrics table."
+        raise TypeError(msg)
+
+    val_opt["metrics"] = normalized_metrics
 
 
 def parse_options(
@@ -218,6 +336,9 @@ def parse_options(
         # debug setting
         if args.debug and not opt["name"].startswith("debug"):
             opt["name"] = "debug_" + opt["name"]
+
+        _normalize_train_losses(opt)
+        _normalize_val_metrics(opt)
 
         if opt.get("num_gpu", "auto") == "auto":
             opt["num_gpu"] = torch.cuda.device_count()

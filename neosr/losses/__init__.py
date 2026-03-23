@@ -6,6 +6,7 @@ from typing import Any
 from torch import nn
 
 from neosr.utils import get_root_logger, scandir
+from neosr.utils.namespaces import ResolvedLossType, prepare_loss_config
 from neosr.utils.registry import LOSS_REGISTRY
 
 __all__ = ["build_loss"]
@@ -22,7 +23,9 @@ _model_modules = [
 ]
 
 
-def build_loss(opt: dict[str, Any]) -> nn.Module | object:
+def build_loss(
+    opt: dict[str, Any], return_info: bool = False
+) -> nn.Module | object | tuple[nn.Module | object, ResolvedLossType]:
     """Build loss from options.
 
     Args:
@@ -32,8 +35,10 @@ def build_loss(opt: dict[str, Any]) -> nn.Module | object:
 
     """
     opt = deepcopy(opt)
+    opt, resolved = prepare_loss_config(opt)
+    opt.pop("name", None)
     loss_type = opt.pop("type")
     loss = LOSS_REGISTRY.get(loss_type)(**opt)  # type: ignore[operator]
     logger = get_root_logger()
     logger.info(f"Loss [{loss.__class__.__name__}] enabled.")
-    return loss
+    return (loss, resolved) if return_info else loss

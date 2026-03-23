@@ -19,6 +19,7 @@ from neosr.metrics import calculate_metric
 from neosr.models.base import base
 from neosr.optimizers import adamw_sf, adan, adan_sf, fsam, soap_sf
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
+from neosr.utils.namespaces import ResolvedLossType
 from neosr.utils.registry import MODEL_REGISTRY
 
 if TYPE_CHECKING:
@@ -161,103 +162,24 @@ class image(base):
         if self.accum_iters in {0, None}:
             self.accum_iters = 1
 
-        # pixel loss
-        if train_opt.get("pixel_opt"):
-            self.cri_pix = build_loss(train_opt["pixel_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_pix = None
-
-        # mssim loss
-        if train_opt.get("mssim_opt"):
-            self.cri_mssim = build_loss(train_opt["mssim_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_mssim = None
-
-        # fdl perceptual loss
-        if train_opt.get("fdl_opt"):
-            self.cri_fdl = build_loss(train_opt["fdl_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_fdl = None
-
-        # ncc loss
-        if train_opt.get("ncc_opt"):
-            self.cri_ncc = build_loss(train_opt["ncc_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_ncc = None
-
-        # kl_div loss
-        if train_opt.get("kl_opt"):
-            self.cri_kl = build_loss(train_opt["kl_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_kl = None
-
-        # consistency loss
-        if train_opt.get("consistency_opt"):
-            self.cri_consistency = build_loss(train_opt["consistency_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_consistency = None
-
-        # msswd loss
-        if train_opt.get("msswd_opt"):
-            self.cri_msswd = build_loss(train_opt["msswd_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_msswd = None
-
-        # vgg19 perceptual loss
-        if train_opt.get("perceptual_opt"):
-            self.cri_perceptual = build_loss(train_opt["perceptual_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_perceptual = None
-
-
-
-        # pyiqa loss
-        if train_opt.get("pyiqa_opt"):
-            self.cri_pyiqa = build_loss(train_opt["pyiqa_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_pyiqa = None
-
-        # gan loss
-        if train_opt.get("gan_opt"):
-            self.cri_gan = build_loss(train_opt["gan_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_gan = None
-
-        # ldl loss
-        if train_opt.get("ldl_opt"):
-            self.cri_ldl = build_loss(train_opt["ldl_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_ldl = None
-
-        # focal-frequency loss
-        if train_opt.get("ff_opt"):
-            self.cri_ff = build_loss(train_opt["ff_opt"]).to(  # type: ignore[reportCallIssue,attr-defined]
-                self.device, memory_format=torch.channels_last, non_blocking=True
-            )
-        else:
-            self.cri_ff = None
+        self.loss_entries = self._build_loss_entries(train_opt.get("losses", []))
+        gan_entries = [
+            loss_entry
+            for loss_entry in self.loss_entries
+            if loss_entry["resolved"].call_kind == "gan"
+        ]
+        if len(gan_entries) > 1:
+            msg = f"{tc.red}Only one adversarial GAN loss can be configured at a time.{tc.end}"
+            logger.error(msg)
+            sys.exit(1)
+        self.gan_loss_entry = gan_entries[0] if gan_entries else None
+        self.cri_gan = (
+            self.gan_loss_entry["module"] if self.gan_loss_entry is not None else None
+        )
+        self.needs_lq_interp = any(
+            loss_entry["resolved"].call_kind == "match_target"
+            for loss_entry in self.loss_entries
+        )
 
         # wavelet-guided loss
         self.wavelet_guided = self.opt["train"].get("wavelet_guided", False)
@@ -282,15 +204,12 @@ class image(base):
         # error handling
         optim_d = self.opt["train"].get("optim_d", None)
         pix_losses_bool = any(
-            loss is not None for loss in (self.cri_pix, self.cri_mssim)
+            loss_entry["resolved"].family == "reconstruction"
+            for loss_entry in self.loss_entries
         )
         percep_losses_bool = any(
-            loss is not None
-            for loss in (
-                self.cri_perceptual,
-                self.cri_pyiqa,
-                self.cri_fdl,
-            )
+            loss_entry["resolved"].family == "perceptual"
+            for loss_entry in self.loss_entries
         )
 
         if self.sam is not None and self.use_amp is True:
@@ -343,6 +262,27 @@ class image(base):
             """
             logger.error(msg)
             sys.exit(1)
+
+    def _build_loss_entries(
+        self, losses_opt: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        logger = get_root_logger()
+        entries: list[dict[str, Any]] = []
+        for loss_opt in losses_opt:
+            loss_name = loss_opt["name"]
+            loss_module, resolved = build_loss(
+                loss_opt, return_info=True
+            )  # type: ignore[assignment]
+            loss_module = loss_module.to(  # type: ignore[union-attr]
+                self.device, memory_format=torch.channels_last, non_blocking=True
+            )
+            logger.info(f"Configured loss '{loss_name}' as [{resolved.canonical_type}].")
+            entries.append({
+                "name": loss_name,
+                "module": loss_module,
+                "resolved": resolved,
+            })
+        return entries
 
     def setup_optimizers(self) -> None:
         train_opt = self.opt["train"]
@@ -516,7 +456,7 @@ class image(base):
                 self.output = torch.clamp(self.output, 1 / 255, 1)
 
             # lq match
-            if self.match_lq_colors:
+            if self.match_lq_colors and self.needs_lq_interp:
                 with torch.no_grad():
                     self.lq_interp = torch.clamp(
                         F.interpolate(
@@ -537,79 +477,28 @@ class image(base):
             l_g_total: Tensor = torch.zeros(1)
             loss_dict = OrderedDict()
 
-            # pixel loss
-            if self.cri_pix:
-                l_g_pix = self.cri_pix(self.output, self.gt)
-                l_g_total += l_g_pix
-                loss_dict["l_g_pix"] = l_g_pix
-            # ssim loss
-            if self.cri_mssim:
-                l_g_mssim = self.cri_mssim(self.output, self.gt)
-                l_g_total += l_g_mssim
-                loss_dict["l_g_mssim"] = l_g_mssim
-            # ncc loss
-            if self.cri_ncc:
-                l_g_ncc = self.cri_ncc(self.output, self.gt)
-                l_g_total += l_g_ncc
-                loss_dict["l_g_ncc"] = l_g_ncc
-            # kl_div loss
-            if self.cri_kl:
-                l_g_kl = self.cri_kl(self.output, self.gt)
-                l_g_total += l_g_kl
-                loss_dict["l_g_kl"] = l_g_kl
-            # fdl perceptual loss
-            if self.cri_fdl:
-                l_g_fdl = self.cri_fdl(self.output, self.gt)
-                l_g_total += l_g_fdl
-                loss_dict["l_g_fdl"] = l_g_fdl
-            # consistency loss
-            if self.cri_consistency:
-                if self.match_lq_colors:
-                    l_g_consistency = self.cri_consistency(self.output, self.lq_interp)
-                else:
-                    l_g_consistency = self.cri_consistency(self.output, self.gt)
-                l_g_total += l_g_consistency
-                loss_dict["l_g_consistency"] = l_g_consistency
-            # msswd loss
-            if self.cri_msswd:
-                if self.match_lq_colors:
-                    l_g_msswd = self.cri_msswd(self.output, self.lq_interp)
-                else:
-                    l_g_msswd = self.cri_msswd(self.output, self.gt)
-                l_g_total += l_g_msswd
-                loss_dict["l_g_msswd"] = l_g_msswd
-            # perceptual loss
-            if self.cri_perceptual:
-                l_g_percep = self.cri_perceptual(self.output, self.gt)
-                l_g_total += l_g_percep
-                loss_dict["l_g_percep"] = l_g_percep
+            for loss_entry in self.loss_entries:
+                loss_name = loss_entry["name"]
+                loss_module = loss_entry["module"]
+                resolved: ResolvedLossType = loss_entry["resolved"]
+                log_key = f"l_g_{loss_name}"
 
-            # pyiqa loss
-            if self.cri_pyiqa:
-                l_g_pyiqa = self.cri_pyiqa(self.output, self.gt)
-                l_g_total += l_g_pyiqa
-                loss_dict["l_g_pyiqa"] = l_g_pyiqa
-            # ldl loss
-            if self.cri_ldl:
-                l_g_ldl = self.cri_ldl(self.output, self.gt)
-                l_g_total += l_g_ldl
-                loss_dict["l_g_ldl"] = l_g_ldl
-            # focal frequency loss
-            if self.cri_ff:
-                l_g_ff = self.cri_ff(self.output, self.gt)
-                l_g_total += l_g_ff
-                loss_dict["l_g_ff"] = l_g_ff
-            # gan loss
-            if self.cri_gan:
-                # switch to eval mode
-                self.net_d.eval()
-                with torch.inference_mode():
-                    fake_g_pred = self.net_d(self.output)  # type: ignore[reportCallIssue,reportOptionalCall]
-                l_g_gan = self.cri_gan(fake_g_pred, target_is_real=True, is_disc=False)
-                l_g_total += l_g_gan
-                loss_dict["l_g_gan"] = l_g_gan
-                # switch to train mode
-                self.net_d.train()
+                if resolved.call_kind == "gan":
+                    self.net_d.eval()
+                    with torch.inference_mode():
+                        fake_g_pred = self.net_d(self.output)  # type: ignore[reportCallIssue,reportOptionalCall]
+                    loss_val = loss_module(  # type: ignore[operator]
+                        fake_g_pred, target_is_real=True, is_disc=False
+                    )
+                    self.net_d.train()
+                elif resolved.call_kind == "match_target":
+                    target = self.lq_interp if self.match_lq_colors else self.gt
+                    loss_val = loss_module(self.output, target)  # type: ignore[operator]
+                else:
+                    loss_val = loss_module(self.output, self.gt)  # type: ignore[operator]
+
+                l_g_total += loss_val
+                loss_dict[log_key] = loss_val
 
         # add total generator loss for tensorboard tracking
         loss_dict["l_g_total"] = l_g_total
@@ -960,7 +849,7 @@ class image(base):
                             if dataset_type == "single":
                                 msg = (
                                     f"Metric '{name}' failed for dataset type 'single'. "
-                                    "Use NR metrics (e.g. calculate_pyiqa with an NR metric_name) "
+                                    "Use NR metrics (e.g. 'pyiqa:nima') "
                                     "or provide GT with dataset type 'paired'."
                                 )
                                 raise ValueError(msg) from exc

@@ -6,6 +6,7 @@ from neosr.metrics.calculate import (
     calculate_psnr,
     calculate_ssim,
 )
+from neosr.utils.namespaces import prepare_metric_config
 from neosr.utils.registry import METRIC_REGISTRY
 
 __all__ = [
@@ -25,5 +26,6 @@ def calculate_metric(data, opt: dict[str, Any]) -> float:
 
     """
     opt = deepcopy(opt)
+    opt, _ = prepare_metric_config(opt)
     metric_type = opt.pop("type")
     return METRIC_REGISTRY.get(metric_type)(**data, **opt)  # type: ignore[operator,return-value]
