@@ -74,11 +74,11 @@ val_freq = 1000
 #tile = 200
 #[[val.metrics]]
 #name = "psnr"
-#type = "native:psnr"
+#type = "builtin:psnr"
 #better = "higher"
 #[[val.metrics]]
 #name = "ssim"
-#type = "native:ssim"
+#type = "builtin:ssim"
 #better = "higher"
 #[[val.metrics]]
 #name = "dists"
@@ -128,41 +128,41 @@ warmup_steps = 600
 #  losses
 [[train.losses]]
 name = "mssim"
-type = "neosr:mssim"
+type = "builtin:mssim"
 weight = 1.0
 
 [[train.losses]]
 name = "consistency"
-type = "neosr:consistency"
+type = "builtin:consistency"
 weight = 1.0
 
 [[train.losses]]
 name = "ldl"
-type = "neosr:ldl"
+type = "builtin:ldl"
 weight = 1.0
 
 [[train.losses]]
 name = "fdl_dinov2"
-type = "neosr:fdl"
+type = "builtin:fdl"
 model = "dinov2" # "vgg", "resnet", "effnet"
 weight = 0.75
 
 [[train.losses]]
 name = "gan_bce"
-type = "neosr:gan"
+type = "builtin:gan"
 gan_type = "bce"
 weight = 0.3
 
 #[[train.losses]]
 #name = "msswd"
-#type = "neosr:msswd"
+#type = "builtin:msswd"
 #weight = 1.0
 
 #[[train.losses]]
 #name = "vgg_perceptual"
-#type = "neosr:vgg_perceptual"
+#type = "builtin:vgg_perceptual"
 #weight = 0.5
-#criterion = "native:huber"
+#criterion = "builtin:huber"
 ##patchloss = true
 ##ipk = true
 ##patch_weight = 1.0
@@ -174,17 +174,17 @@ weight = 0.3
 
 #[[train.losses]]
 #name = "ff"
-#type = "neosr:ff"
+#type = "builtin:ff"
 #weight = 0.35
 
 #[[train.losses]]
 #name = "ncc"
-#type = "neosr:ncc"
+#type = "builtin:ncc"
 #weight = 1.0
 
 #[[train.losses]]
 #name = "kl"
-#type = "neosr:kl"
+#type = "builtin:kl"
 #weight = 1.0
 
 #[[train.losses]]

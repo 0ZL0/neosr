@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from neosr.archs.arch_util import net_opt
 from neosr.archs.vgg_arch import VGGFeatureExtractor
 from neosr.losses.basic_loss import chc_loss
-from neosr.utils.namespaces import normalize_native_criterion
+from neosr.utils.namespaces import normalize_builtin_criterion
 from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
@@ -88,7 +88,7 @@ class vgg_perceptual_loss(nn.Module):
         use_input_norm: bool = True,
         range_norm: bool = False,
         loss_weight: float = 1.0,
-        criterion: str = "native:clipped_pseudo_huber_cosine",
+        criterion: str = "builtin:clipped_pseudo_huber_cosine",
         patchloss: bool = False,
         ipk: bool = False,
         patch_weight: float = 1.0,
@@ -134,7 +134,7 @@ class vgg_perceptual_loss(nn.Module):
         )
 
         self.criterion: nn.L1Loss | nn.MSELoss | nn.HuberLoss | Callable
-        self.criterion_type = normalize_native_criterion(criterion)
+        self.criterion_type = normalize_builtin_criterion(criterion)
         if self.criterion_type == "l1":
             self.criterion = nn.L1Loss()
         elif self.criterion_type == "l2":

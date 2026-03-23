@@ -24,41 +24,41 @@ LEGACY_TRAIN_LOSS_KEYS: tuple[str, ...] = (
 )
 
 LOSS_TYPE_ALIASES: dict[str, str] = {
-    "L1Loss": "native:l1",
-    "MSELoss": "native:mse",
-    "HuberLoss": "native:huber",
-    "chc_loss": "native:clipped_pseudo_huber_cosine",
-    "mssim_loss": "neosr:mssim",
-    "fdl_loss": "neosr:fdl",
-    "ncc_loss": "neosr:ncc",
-    "kl_loss": "neosr:kl",
-    "consistency_loss": "neosr:consistency",
-    "msswd_loss": "neosr:msswd",
-    "vgg_perceptual_loss": "neosr:vgg_perceptual",
+    "L1Loss": "builtin:l1",
+    "MSELoss": "builtin:mse",
+    "HuberLoss": "builtin:huber",
+    "chc_loss": "builtin:clipped_pseudo_huber_cosine",
+    "mssim_loss": "builtin:mssim",
+    "fdl_loss": "builtin:fdl",
+    "ncc_loss": "builtin:ncc",
+    "kl_loss": "builtin:kl",
+    "consistency_loss": "builtin:consistency",
+    "msswd_loss": "builtin:msswd",
+    "vgg_perceptual_loss": "builtin:vgg_perceptual",
     "pyiqa_loss": "pyiqa",
-    "gan_loss": "neosr:gan",
-    "ldl_loss": "neosr:ldl",
-    "ff_loss": "neosr:ff",
+    "gan_loss": "builtin:gan",
+    "ldl_loss": "builtin:ldl",
+    "ff_loss": "builtin:ff",
 }
 
 METRIC_TYPE_ALIASES: dict[str, str] = {
-    "calculate_psnr": "native:psnr",
-    "calculate_ssim": "native:ssim",
+    "calculate_psnr": "builtin:psnr",
+    "calculate_ssim": "builtin:ssim",
     "calculate_pyiqa": "pyiqa",
 }
 
 CRITERION_ALIASES: dict[str, str] = {
     "l1": "l1",
-    "native:l1": "l1",
+    "builtin:l1": "l1",
     "l2": "l2",
     "mse": "l2",
-    "native:l2": "l2",
-    "native:mse": "l2",
+    "builtin:l2": "l2",
+    "builtin:mse": "l2",
     "huber": "huber",
-    "native:huber": "huber",
+    "builtin:huber": "huber",
     "chc": "chc",
-    "native:chc": "chc",
-    "native:clipped_pseudo_huber_cosine": "chc",
+    "builtin:chc": "chc",
+    "builtin:clipped_pseudo_huber_cosine": "chc",
 }
 
 LEGACY_TRAIN_LOSS_NAMES: dict[str, str] = {
@@ -118,8 +118,8 @@ def resolve_loss_type(loss_type: str, *, warn_legacy: bool = True) -> ResolvedLo
             )
         return resolve_loss_type(canonical, warn_legacy=False)
 
-    if provider == "native":
-        native_map = {
+    if provider == "builtin":
+        builtin_map = {
             "l1": ("L1Loss", "reconstruction", "standard"),
             "mse": ("MSELoss", "reconstruction", "standard"),
             "l2": ("MSELoss", "reconstruction", "standard"),
@@ -130,26 +130,6 @@ def resolve_loss_type(loss_type: str, *, warn_legacy: bool = True) -> ResolvedLo
                 "standard",
             ),
             "chc": ("chc_loss", "reconstruction", "standard"),
-        }
-        if name not in native_map:
-            msg = f"Unsupported native loss '{loss_type}'."
-            raise ValueError(msg)
-        registry_type, family, call_kind = native_map[name]
-        canonical = (
-            "native:mse"
-            if name == "l2"
-            else (
-                "native:clipped_pseudo_huber_cosine"
-                if name == "chc"
-                else f"native:{name}"
-            )
-        )
-        if warn_legacy and canonical != loss_type:
-            _warn(f"Loss alias '{loss_type}' is deprecated; use '{canonical}' instead.")
-        return ResolvedLossType(canonical, registry_type, family, call_kind)
-
-    if provider == "neosr":
-        neosr_map = {
             "mssim": ("mssim_loss", "reconstruction", "standard"),
             "fdl": ("fdl_loss", "perceptual", "standard"),
             "ncc": ("ncc_loss", None, "standard"),
@@ -161,11 +141,22 @@ def resolve_loss_type(loss_type: str, *, warn_legacy: bool = True) -> ResolvedLo
             "ldl": ("ldl_loss", None, "standard"),
             "ff": ("ff_loss", None, "standard"),
         }
-        if name not in neosr_map:
-            msg = f"Unsupported neosr loss '{loss_type}'."
+        if name not in builtin_map:
+            msg = f"Unsupported builtin loss '{loss_type}'."
             raise ValueError(msg)
-        registry_type, family, call_kind = neosr_map[name]
-        return ResolvedLossType(loss_type, registry_type, family, call_kind)
+        registry_type, family, call_kind = builtin_map[name]
+        canonical = (
+            "builtin:mse"
+            if name == "l2"
+            else (
+                "builtin:clipped_pseudo_huber_cosine"
+                if name == "chc"
+                else f"builtin:{name}"
+            )
+        )
+        if warn_legacy and canonical != loss_type:
+            _warn(f"Loss alias '{loss_type}' is deprecated; use '{canonical}' instead.")
+        return ResolvedLossType(canonical, registry_type, family, call_kind)
 
     if provider == "pyiqa":
         if not name:
@@ -192,14 +183,14 @@ def resolve_metric_type(
             )
         return resolve_metric_type(canonical, warn_legacy=False)
 
-    if provider == "native":
-        native_map = {
+    if provider == "builtin":
+        builtin_map = {
             "psnr": "calculate_psnr",
             "ssim": "calculate_ssim",
         }
-        registry_type = native_map.get(name)
+        registry_type = builtin_map.get(name)
         if registry_type is None:
-            msg = f"Unsupported native metric '{metric_type}'."
+            msg = f"Unsupported builtin metric '{metric_type}'."
             raise ValueError(msg)
         return ResolvedMetricType(metric_type, registry_type)
 
@@ -260,7 +251,7 @@ def prepare_metric_config(
     return cfg, resolved
 
 
-def normalize_native_criterion(value: str, field_name: str = "criterion") -> str:
+def normalize_builtin_criterion(value: str, field_name: str = "criterion") -> str:
     normalized = CRITERION_ALIASES.get(value)
     if normalized is None:
         msg = f"Unsupported {field_name} value '{value}'."
@@ -268,19 +259,19 @@ def normalize_native_criterion(value: str, field_name: str = "criterion") -> str
 
     if ":" not in value:
         canonical = {
-            "l1": "native:l1",
-            "l2": "native:mse",
-            "mse": "native:mse",
-            "huber": "native:huber",
-            "chc": "native:clipped_pseudo_huber_cosine",
+            "l1": "builtin:l1",
+            "l2": "builtin:mse",
+            "mse": "builtin:mse",
+            "huber": "builtin:huber",
+            "chc": "builtin:clipped_pseudo_huber_cosine",
         }[value]
         _warn(f"Legacy {field_name} value '{value}' is deprecated; use '{canonical}' instead.")
-    elif value == "native:l2":
-        _warn("Criterion alias 'native:l2' is deprecated; use 'native:mse' instead.")
-    elif value == "native:chc":
+    elif value == "builtin:l2":
+        _warn("Criterion alias 'builtin:l2' is deprecated; use 'builtin:mse' instead.")
+    elif value == "builtin:chc":
         _warn(
-            "Criterion alias 'native:chc' is deprecated; use "
-            "'native:clipped_pseudo_huber_cosine' instead."
+            "Criterion alias 'builtin:chc' is deprecated; use "
+            "'builtin:clipped_pseudo_huber_cosine' instead."
         )
 
     return normalized

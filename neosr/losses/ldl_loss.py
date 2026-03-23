@@ -5,7 +5,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from neosr.losses.basic_loss import chc_loss
-from neosr.utils.namespaces import normalize_native_criterion
+from neosr.utils.namespaces import normalize_builtin_criterion
 from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
@@ -27,12 +27,12 @@ class ldl_loss(nn.Module):
     """
 
     def __init__(
-        self, criterion: str = "native:l1", loss_weight: float = 1.0, ksize: int = 7
+        self, criterion: str = "builtin:l1", loss_weight: float = 1.0, ksize: int = 7
     ) -> None:
         super().__init__()
         self.loss_weight = loss_weight
         self.ksize = ksize
-        self.criterion_type = normalize_native_criterion(criterion)
+        self.criterion_type = normalize_builtin_criterion(criterion)
         self.criterion: nn.L1Loss | nn.MSELoss | nn.HuberLoss | Callable
 
         if self.criterion_type == "l1":

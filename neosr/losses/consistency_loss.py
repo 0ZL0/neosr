@@ -5,7 +5,7 @@ from torch import Tensor, nn
 from torchvision.transforms import GaussianBlur
 
 from neosr.losses.basic_loss import chc_loss
-from neosr.utils.namespaces import normalize_native_criterion
+from neosr.utils.namespaces import normalize_builtin_criterion
 from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ class consistency_loss(nn.Module):
 
     def __init__(
         self,
-        criterion: str = "native:clipped_pseudo_huber_cosine",
+        criterion: str = "builtin:clipped_pseudo_huber_cosine",
         blur: bool = True,
         cosim: bool = True,
         saturation: float = 1.0,
@@ -46,7 +46,7 @@ class consistency_loss(nn.Module):
         if self.use_blur:
             self.blur = GaussianBlur(21, 3)
 
-        self.criterion_type = normalize_native_criterion(criterion)
+        self.criterion_type = normalize_builtin_criterion(criterion)
         self.criterion: nn.L1Loss | nn.HuberLoss | Callable
 
         if self.criterion_type == "l1":
