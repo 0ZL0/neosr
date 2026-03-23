@@ -1,0 +1,119 @@
+name = "train_rfdn"
+model_type = "image"
+scale = 4
+use_amp = true
+bfloat16 = true
+fast_matmul = true
+#compile = true
+#manual_seed = 1024
+
+[datasets.train]
+type = "paired"
+dataroot_gt = 'C:\datasets\gt\'
+dataroot_lq = 'C:\datasets\lq\'
+patch_size = 64
+batch_size = 8
+pin_memory = true
+#accumulate = 1
+augmentation = [ "none", "mixup", "cutmix", "resizemix", "cutblur" ]
+aug_prob = [ 0.5, 0.1, 0.1, 0.1, 0.5 ]
+
+[datasets.val]
+name = "val"
+type = "paired"
+dataroot_gt = 'C:\datasets\val\gt\'
+dataroot_lq = 'C:\datasets\val\lq\'
+[val]
+val_freq = 1000
+#tile = 200
+#[[val.metrics]]
+#name = "psnr"
+#type = "builtin:psnr"
+#better = "higher"
+#[[val.metrics]]
+#name = "ssim"
+#type = "builtin:ssim"
+#better = "higher"
+#[[val.metrics]]
+#name = "dists"
+#type = "pyiqa:dists"
+#better = "lower"
+#[[val.metrics]]
+#name = "lpips"
+#type = "pyiqa:lpips"
+#better = "lower"
+
+[path]
+#pretrain_network_g = 'experiments\pretrain_g.pth'
+#pretrain_network_d = 'experiments\pretrain_d.pth'
+
+[network_g]
+type = "rfdn"
+in_nc = 3
+out_nc = 3
+nf = 50
+num_modules = 4
+upscale = 4
+
+[network_d]
+type = "metagan"
+
+[train]
+ema = 0.999
+wavelet_guided = true
+wavelet_init = 80000
+#sam = "fsam"
+#sam_init = 1000
+#eco = true
+#eco_init = 15000
+#match_lq_colors = true
+
+[train.optim_g]
+type = "adan_sf"
+lr = 5e-4
+betas = [ 0.98, 0.92, 0.99 ]
+weight_decay = 0.01
+schedule_free = true
+warmup_steps = 1600
+
+[train.optim_d]
+type = "adan_sf"
+lr = 1e-4
+betas = [ 0.98, 0.92, 0.99 ]
+weight_decay = 0.01
+schedule_free = true
+warmup_steps = 600
+
+[[train.losses]]
+name = "mssim"
+type = "builtin:mssim"
+weight = 1.0
+
+[[train.losses]]
+name = "consistency"
+type = "builtin:consistency"
+weight = 1.0
+
+[[train.losses]]
+name = "ldl"
+type = "builtin:ldl"
+weight = 1.0
+
+[[train.losses]]
+name = "fdl_dinov2"
+type = "builtin:fdl"
+model = "dinov2"
+weight = 0.75
+
+[[train.losses]]
+name = "gan_bce"
+type = "builtin:gan"
+gan_type = "bce"
+weight = 0.3
+
+[logger]
+total_iter = 1000000
+save_checkpoint_freq = 1000
+use_tb_logger = true
+#save_tb_img = true
+#print_freq = 100
