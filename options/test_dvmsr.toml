@@ -1,0 +1,24 @@
+# Results will be saved to neosr/experiments/results/
+
+name = "test_dvmsr"
+model_type = "image"
+scale = 4
+#use_amp = true
+#compile = true
+
+[datasets.test_1]
+name = "val_1"
+type = "single"
+dataroot_lq = 'C:\datasets\val\'
+[val]
+#tile = 200
+
+[network_g]
+type = "dvmsr"
+
+[path]
+# Recommended official NTIRE submission weight:
+pretrain_network_g = 'DVMSR\model_zoo\team07_DVMSR.pth'
+strict_load_g = true
+# Alternate official packed checkpoint:
+#pretrain_network_g = 'DVMSR\model_zoo\DVMSR.pth'
