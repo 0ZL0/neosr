@@ -62,6 +62,7 @@ Configuration templates are available in [options](options/).
 | [Sebica](https://github.com/idiosyncracies/Sebica)				| `sebica`, `sebica_mini`			   |
 | [NinaSR](https://github.com/Coloquinte/torchSR/blob/main/doc/NinaSR.md)	| `ninasr`, `ninasr_b0`, `ninasr_b2`		   |
 | [RCAN](https://github.com/yulunzhang/RCAN)					| `rcan`					   |
+| [RFDN](https://github.com/njulj/RFDN)					| `rfdn`					   |
 | [MoESR](https://github.com/umzi2/MoESR)					| `moesr`					   |
 | [ASID](https://github.com/saturnian77/ASID)					| `asid`, `asid_d8`				   |
 | [MoSRV2](https://github.com/umzi2/MoSRV2)					| `mosrv2`					   |
