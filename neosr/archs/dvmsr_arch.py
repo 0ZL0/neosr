@@ -15,9 +15,12 @@ from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 try:
-    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
-    RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
+    try:
+        from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    except ImportError:
+        RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
 upscale, __ = net_opt()
 
