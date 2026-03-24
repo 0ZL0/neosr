@@ -1,0 +1,25 @@
+# Results will be saved to neosr/experiments/results/
+
+name = "test_pftsr"
+model_type = "image"
+scale = 4
+#use_amp = true
+#compile = true
+
+[datasets.test_1]
+name = "val_1"
+type = "single"
+dataroot_lq = 'C:\datasets\val\'
+[val]
+#tile = 128
+
+[network_g]
+type = "pftsr"
+#type = "pftsr_light"
+
+[path]
+# Recommended x4 official weights:
+pretrain_network_g = 'D:\Model\PFT-SR\003_PFT_SRx4_finetune.pth'
+#pretrain_network_g = 'D:\Model\PFT-SR\103_PFT_light_SRx4_finetune.pth'
+strict_load_g = true
+
