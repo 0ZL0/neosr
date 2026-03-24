@@ -18,12 +18,19 @@ def default_conv(in_channels, out_channels, kernel_size, bias=True):
 class MeanShift(nn.Conv2d):
     def __init__(self, rgb_mean, rgb_std, sign=-1):
         super().__init__(3, 3, kernel_size=1)
-        std = torch.Tensor(rgb_std)
-        self.weight.data = torch.eye(3).view(3, 3, 1, 1)
-        self.weight.data.div_(std.view(3, 1, 1, 1))
-        self.bias.data = sign * 1.0 * torch.Tensor(rgb_mean)
-        self.bias.data.div_(std)
-        self.requires_grad = False
+        device = self.weight.device
+        dtype = self.weight.dtype
+        std = torch.tensor(rgb_std, device=device, dtype=dtype)
+        mean = torch.tensor(rgb_mean, device=device, dtype=dtype)
+
+        with torch.no_grad():
+            self.weight.copy_(torch.eye(3, device=device, dtype=dtype).view(3, 3, 1, 1))
+            self.weight.div_(std.view(3, 1, 1, 1))
+            self.bias.copy_(sign * mean)
+            self.bias.div_(std)
+
+        for parameter in self.parameters():
+            parameter.requires_grad = False
 
 
 class Upsampler(nn.Sequential):
