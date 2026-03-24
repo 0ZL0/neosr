@@ -15,12 +15,8 @@ dataroot_lq = 'C:\datasets\val\'
 
 [network_g]
 type = "rfdn"
-in_nc = 3
-out_nc = 3
-nf = 50
-num_modules = 4
-upscale = 4
+#type = "rfdn_l"
+#type = "rfdn_e"
 
 [path]
 pretrain_network_g = 'C:\model.pth'
-

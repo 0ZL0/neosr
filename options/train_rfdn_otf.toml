@@ -94,11 +94,8 @@ val_freq = 1000
 
 [network_g]
 type = "rfdn"
-in_nc = 3
-out_nc = 3
-nf = 50
-num_modules = 4
-upscale = 4
+#type = "rfdn_l"
+#type = "rfdn_e"
 
 [network_d]
 type = "metagan"
