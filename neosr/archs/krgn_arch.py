@@ -14,12 +14,12 @@ class MeanShift(nn.Conv2d):
         self, rgb_range=1.0, rgb_mean=(0.5, 0.5, 0.5), rgb_std=(1.0, 1.0, 1.0), sign=-1
     ):
         super().__init__(3, 3, kernel_size=1)
-        std = torch.Tensor(rgb_std).to("cuda")
-        self.weight.data = torch.eye(3).view(3, 3, 1, 1) / std.view(3, 1, 1, 1).to(
-            "cuda"
-        )
-        self.bias.data = sign * rgb_range * torch.Tensor(rgb_mean).to("cuda")
-        self.bias.data.div_(std)
+        std = self.weight.new_tensor(rgb_std)
+        mean = self.bias.new_tensor(rgb_mean)
+        identity = torch.eye(3, device=self.weight.device, dtype=self.weight.dtype)
+        with torch.no_grad():
+            self.weight.copy_(identity.view(3, 3, 1, 1) / std.view(3, 1, 1, 1))
+            self.bias.copy_(sign * rgb_range * mean / std)
         self.requires_grad = False
 
 

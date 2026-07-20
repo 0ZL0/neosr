@@ -617,6 +617,7 @@ def esc_light(**kwargs):
 
 @ARCH_REGISTRY.register()
 def esc_fp(**kwargs):
+    kwargs.setdefault("use_dysample", False)
     return esc(dim=48, num_heads=3, is_fp=True, realsr=False, **kwargs)
 
 
