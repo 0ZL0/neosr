@@ -7,7 +7,7 @@ from torch.nn import functional as F
 
 from neosr.utils.rng import rng
 
-rng = rng()
+rng = rng(__name__)
 
 
 @torch.no_grad()

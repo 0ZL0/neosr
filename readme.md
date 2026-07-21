@@ -24,7 +24,8 @@ Configuration templates are available in [options](options/).
 ## Notes
 
 - `pftsr` / `pftsr_light` strongly depend on `smm_cuda` to achieve normal performance. Without it, inference may consume very large compute and VRAM resources. A local Windows build is available here for reference only: [smm_cuda-1.0-cp313-cp313-win_amd64.whl](wheels_for_windows/smm_cuda-1.0-cp313-cp313-win_amd64.whl). This wheel was built against Python 3.13, PyTorch 2.7.0+cu128, CUDA Toolkit 12.8, and MSVC 2022 on Windows.
-- `dvmsr` depends on the `mamba_ssm` library.
+- `dvmsr` depends on the optional `mamba_ssm` library. It is imported only when
+  `dvmsr` is selected; other architectures do not require it.
 
 ## Supported Archs
 

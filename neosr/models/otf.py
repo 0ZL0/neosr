@@ -17,7 +17,7 @@ from neosr.utils.misc import tc
 from neosr.utils.registry import MODEL_REGISTRY
 from neosr.utils.rng import rng
 
-rng = rng()
+rng = rng(__name__)
 
 
 @MODEL_REGISTRY.register()

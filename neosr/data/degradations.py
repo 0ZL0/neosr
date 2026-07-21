@@ -11,7 +11,7 @@ from torchvision.transforms.functional import rgb_to_grayscale
 
 from neosr.utils.rng import rng
 
-rng = rng()
+rng = rng(__name__)
 
 # -------------------------------------------------------------------- #
 # --------------------------- blur kernels --------------------------- #
@@ -536,10 +536,10 @@ def generate_gaussian_noise(img, sigma=10, gray_noise=False):
 
     """
     if gray_noise:
-        noise = np.float32(rng.randn(*(img.shape[0:2]))) * sigma / 255.0
+        noise = np.float32(rng.standard_normal(img.shape[0:2])) * sigma / 255.0
         noise = np.expand_dims(noise, axis=2).repeat(3, axis=2)
     else:
-        noise = np.float32(rng.randn(*(img.shape))) * sigma / 255.0
+        noise = np.float32(rng.standard_normal(img.shape)) * sigma / 255.0
     return noise
 
 

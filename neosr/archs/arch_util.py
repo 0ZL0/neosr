@@ -1,30 +1,18 @@
 from collections.abc import Callable, Iterable
 from itertools import repeat
-from pathlib import Path
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.utils.options import parse_options
-
 
 def net_opt() -> tuple[int, bool]:
-    # initialize options parsing
-    root_path = Path(__file__).parents[2]
-    opt, args = parse_options(str(root_path), is_train=True)
+    """Return legacy architecture defaults without reading process-global CLI state.
 
-    # set variable for scale factor and training phase
-    # conditions needed due to convert.py
-
-    if args.input is None:
-        upscale = opt["scale"]
-        training = "train" in opt["datasets"]
-    else:
-        upscale = args.scale
-        training = False
-
-    return upscale, training
+    ``build_network`` injects the configured scale explicitly. The fallback remains for
+    third-party code importing architecture constructors directly.
+    """
+    return 4, True
 
 
 class DySample(nn.Module):
@@ -142,8 +130,6 @@ class DropPath(nn.Module):
         super().__init__()
         self.drop_prob = drop_prob
         self.scale_by_keep = scale_by_keep
-        __, training = net_opt()
-        self.training = training
 
     def forward(self, x: Tensor) -> Tensor:
         return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)

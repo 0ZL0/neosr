@@ -183,5 +183,5 @@ class sebica(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-def sebica_mini(**kwargs):  # noqa: ARG001
-    return sebica(N=8, mini=True)
+def sebica_mini(sr_rate=upscale, **kwargs):  # noqa: ARG001
+    return sebica(sr_rate=sr_rate, N=8, mini=True)

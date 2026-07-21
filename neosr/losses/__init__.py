@@ -24,7 +24,7 @@ _model_modules = [
 
 
 def build_loss(
-    opt: dict[str, Any], return_info: bool = False
+    opt: dict[str, Any], return_info: bool = False, *, scale: int | None = None
 ) -> nn.Module | object | tuple[nn.Module | object, ResolvedLossType]:
     """Build loss from options.
 
@@ -36,6 +36,8 @@ def build_loss(
     """
     opt = deepcopy(opt)
     opt, resolved = prepare_loss_config(opt)
+    if resolved.registry_type == "vgg_perceptual_loss" and scale is not None:
+        opt.setdefault("scale", scale)
     opt.pop("name", None)
     loss_type = opt.pop("type")
     loss = LOSS_REGISTRY.get(loss_type)(**opt)  # type: ignore[operator]

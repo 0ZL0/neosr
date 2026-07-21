@@ -116,10 +116,10 @@ class ninasr(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-def ninasr_b0(**kwargs):  # noqa: ARG001
-    return ninasr(n_resblocks=10, n_feats=16)
+def ninasr_b0(scale=upscale, **kwargs):  # noqa: ARG001
+    return ninasr(n_resblocks=10, n_feats=16, scale=scale)
 
 
 @ARCH_REGISTRY.register()
-def ninasr_b2(**kwargs):  # noqa: ARG001
-    return ninasr(n_resblocks=84, n_feats=56)
+def ninasr_b2(scale=upscale, **kwargs):  # noqa: ARG001
+    return ninasr(n_resblocks=84, n_feats=56, scale=scale)

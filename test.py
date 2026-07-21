@@ -10,6 +10,7 @@ from neosr.data import build_dataloader, build_dataset
 from neosr.models import build_model
 from neosr.utils import get_root_logger, get_time_str, make_exp_dirs, tc
 from neosr.utils.options import parse_options
+from neosr.utils.validation import resolve_validation_save_img
 
 
 def test_pipeline(root_path: str) -> None:
@@ -54,7 +55,7 @@ def test_pipeline(root_path: str) -> None:
                 test_loader,
                 current_iter=opt["name"],
                 tb_logger=None,
-                save_img=opt["val"].get("save_img", True),
+                save_img=resolve_validation_save_img(test_loader, opt.get("val")),
             )
             end_time = time()
             total_time = end_time - start_time

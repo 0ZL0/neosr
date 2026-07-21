@@ -17,6 +17,11 @@ from neosr.losses import build_loss
 from neosr.losses.wavelet_guided import wavelet_guided
 from neosr.metrics import calculate_metric
 from neosr.models.base import base
+from neosr.models.training_utils import (
+    advance_accumulation,
+    generator_adversarial_loss,
+    normalize_accumulation_steps,
+)
 from neosr.optimizers import adamw_sf, adan, adan_sf, fsam, soap_sf
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
 from neosr.utils.namespaces import ResolvedLossType
@@ -34,7 +39,7 @@ class image(base):
         super().__init__(opt)
 
         # define network net_g
-        self.net_g = build_network(opt["network_g"])
+        self.net_g = build_network(opt["network_g"], scale=opt["scale"])
         self.net_g = self.model_to_device(self.net_g)  # type: ignore[reportArgumentType,reportArgumentType,arg-type]
         if self.opt["path"].get("print_network", False) is True:
             self.print_network(self.net_g)
@@ -42,7 +47,7 @@ class image(base):
         # define network net_d
         self.net_d = self.opt.get("network_d", None)
         if self.net_d is not None:
-            self.net_d = build_network(self.opt["network_d"])
+            self.net_d = build_network(self.opt["network_d"], scale=opt["scale"])
             self.net_d = self.model_to_device(self.net_d)  # type: ignore[reportArgumentType]
             if self.opt.get("print_network", False) is True:
                 self.print_network(self.net_d)
@@ -158,9 +163,9 @@ class image(base):
 
         # initialise counter of how many batches has to be accumulated
         self.n_accumulated = 0
-        self.accum_iters = self.opt["datasets"]["train"].get("accumulate", 1)
-        if self.accum_iters in {0, None}:
-            self.accum_iters = 1
+        self.accum_iters = normalize_accumulation_steps(
+            self.opt["datasets"]["train"].get("accumulate", 1)
+        )
 
         self.loss_entries = self._build_loss_entries(train_opt.get("losses", []))
         gan_entries = [
@@ -271,7 +276,7 @@ class image(base):
         for loss_opt in losses_opt:
             loss_name = loss_opt["name"]
             loss_module, resolved = build_loss(
-                loss_opt, return_info=True
+                loss_opt, return_info=True, scale=self.scale
             )  # type: ignore[assignment]
             loss_module = loss_module.to(  # type: ignore[union-attr]
                 self.device, memory_format=torch.channels_last, non_blocking=True
@@ -433,12 +438,6 @@ class image(base):
             for p in self.net_d.parameters():  # type: ignore[reportAttributeAccessIssue,operator]
                 p.requires_grad = False
 
-        # increment accumulation counter
-        self.n_accumulated += 1
-        # reset accumulation counter
-        if self.n_accumulated >= self.accum_iters:
-            self.n_accumulated = 0
-
         with torch.autocast(
             device_type="cuda", dtype=self.amp_dtype, enabled=self.use_amp
         ):
@@ -484,13 +483,11 @@ class image(base):
                 log_key = f"l_g_{loss_name}"
 
                 if resolved.call_kind == "gan":
-                    self.net_d.eval()
-                    with torch.inference_mode():
-                        fake_g_pred = self.net_d(self.output)  # type: ignore[reportCallIssue,reportOptionalCall]
-                    loss_val = loss_module(  # type: ignore[operator]
-                        fake_g_pred, target_is_real=True, is_disc=False
+                    loss_val = generator_adversarial_loss(
+                        self.net_d,  # type: ignore[arg-type]
+                        self.output,
+                        loss_module,  # type: ignore[arg-type]
                     )
-                    self.net_d.train()
                 elif resolved.call_kind == "match_target":
                     target = self.lq_interp if self.match_lq_colors else self.gt
                     loss_val = loss_module(self.output, target)  # type: ignore[operator]
@@ -616,16 +613,14 @@ class image(base):
         return l_g_total
 
     def optimize_parameters(self, current_iter: int) -> None:
-        # increment accumulation counter
-        self.n_accumulated += 1
-        # reset accumulation counter
-        if self.n_accumulated >= self.accum_iters:
-            self.n_accumulated = 0
+        self.n_accumulated, should_step = advance_accumulation(
+            self.n_accumulated, self.accum_iters
+        )
 
         # run forward-backward
         self.closure(current_iter)
 
-        if (self.n_accumulated) % self.accum_iters == 0:
+        if should_step:
             # step() for generator
             if self.sam and current_iter >= self.sam_init:
                 self.sam_optimizer_g.step(self.closure, current_iter)
@@ -801,7 +796,10 @@ class image(base):
             if save_img:
                 if self.opt["is_train"]:
                     save_img_path = (
-                        Path(v_folder) / img_name / f"{img_name}_{current_iter}.png"
+                        Path(v_folder)
+                        / dataset_name
+                        / img_name
+                        / f"{img_name}_{current_iter}.png"
                     )
                 elif val_suffix is not None:
                     save_img_path = (
@@ -819,19 +817,19 @@ class image(base):
 
                 # add original lq and gt to results folder, once
                 if self.opt["val"].get("save_lq", True):
-                    save_lq_img_path = Path(v_folder) / img_name / f"{img_name}_lq.png"
+                    save_lq_img_path = save_img_path.parent / f"{img_name}_lq.png"
 
                     if not Path.exists(save_lq_img_path):
                         original_lq = tensor2img([visuals["lq"]])
                         imwrite(original_lq, str(save_lq_img_path))
 
             # check for dataset option save_tb, to save images on tb_logger
-            if self.is_train:
+            if self.opt["is_train"] and tb_logger is not None:
                 save_tb_img = self.opt["logger"].get("save_tb_img", False)
                 if save_tb_img:
                     sr_img_tb = tensor2img([visuals["result"]], rgb2bgr=False)
                     tb_logger.add_image(
-                        f"{img_name}/{current_iter}",
+                        f"{dataset_name}/{img_name}/{current_iter}",
                         sr_img_tb,
                         global_step=current_iter,
                         dataformats="HWC",

@@ -21,7 +21,7 @@ from neosr.utils import get_root_logger, imfrombytes, img2tensor, scandir, tc
 from neosr.utils.registry import DATASET_REGISTRY
 from neosr.utils.rng import rng
 
-rng = rng()
+rng = rng(__name__)
 
 
 @DATASET_REGISTRY.register()

@@ -5,7 +5,6 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt
 from neosr.archs.vgg_arch import VGGFeatureExtractor
 from neosr.losses.basic_loss import chc_loss
 from neosr.utils.namespaces import normalize_builtin_criterion
@@ -13,8 +12,6 @@ from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-upscale, __ = net_opt()
 
 
 class PatchesKernel3D(nn.Module):
@@ -92,6 +89,7 @@ class vgg_perceptual_loss(nn.Module):
         patchloss: bool = False,
         ipk: bool = False,
         patch_weight: float = 1.0,
+        scale: int = 4,
         **kwargs,  # noqa: ARG002
     ) -> None:
         super().__init__()
@@ -116,14 +114,14 @@ class vgg_perceptual_loss(nn.Module):
             raise ValueError(msg)
 
         if patchloss:
-            if upscale == 4:
+            if scale == 4:
                 self.perceptual_kernels = [4, 8]
                 self.ipk_kernels = [7, 11, 15]
-            elif upscale == 2:
+            elif scale == 2:
                 self.perceptual_kernels = [3, 6]
                 self.ipk_kernels = [3, 5, 7]
             else:
-                msg = f"PatchLoss does not support upscale ratio {upscale}."
+                msg = f"PatchLoss does not support upscale ratio {scale}."
                 raise NotImplementedError(msg)
 
         self.vgg = VGGFeatureExtractor(  # type: ignore[reportCallIssue]

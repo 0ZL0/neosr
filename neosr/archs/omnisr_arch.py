@@ -1117,7 +1117,13 @@ class omnisr_net(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-def omnisr(**kwargs):
+def omnisr(upsampling=upscale, **kwargs):
     return omnisr_net(
-        res_num=5, block_num=1, bias=True, pe=True, ffn_bias=True, **kwargs
+        res_num=5,
+        block_num=1,
+        bias=True,
+        pe=True,
+        ffn_bias=True,
+        upsampling=upsampling,
+        **kwargs,
     )

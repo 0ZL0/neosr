@@ -5,66 +5,6 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
-"""
-# TODO: fix compile()
-
-from neosr.utils.options import parse_options
-
-
-def toml_opt():
-    # initialize options parsing
-    root_path = Path(__file__).parents[2]
-    opt, args = parse_options(str(root_path), is_train=True)
-    # set variable for scale factor and training phase
-    # conditions needed due to convert.py
-    if args.input is None:
-        compile_opt = opt["compile"]
-
-    return compile_opt
-
-
-def decorator(func):
-    compiled = None
-
-    @functools.wraps(func)
-    def _fn(*args, **kwargs):
-        compile_opt = toml_opt
-        compile_mode_recommended_to_none = None
-        dynamic = False
-
-        if is_compiling() or compile_mode_recommended_to_none is None or compile_opt is False:
-            return func(*args, **kwargs)
-        nonlocal compiled
-        if compiled is None and compile_opt is True:
-            compiled = torch.compile(
-                fullgraph=True, dynamic=dynamic, mode=compile_mode_recommended_to_none
-            )(func)
-        return compiled(*args, **kwargs)
-
-    return _fn
-
-
-def decorator_knowngood(func: Callable):
-    compiled = None
-
-    @functools.wraps(func)
-    def _fn(*args, **kwargs):
-        compile_opt = toml_opt
-        dynamic = False
-        compile_mode = "max-autotune-no-cudagraphs"
-
-        if is_compiling() or compile_mode is None or compile_opt is False:
-            return func(*args, **kwargs)
-        nonlocal compiled
-        if compiled is None and compile_opt is True:
-            compiled = torch.compile(
-            fullgraph=True, dynamic=dynamic, mode=compile_mode
-            )(func)
-        return compiled(*args, **kwargs)
-
-    return _fn
-"""
-
 
 def warmup(lr: float, step: int, warmup_steps: int):
     if step >= warmup_steps:  # if instead of min to guard against 0 div

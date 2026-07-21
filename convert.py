@@ -105,7 +105,7 @@ def load_net():
             load_net[k[7:]] = v
             load_net.pop(k)
 
-    net = build_network(net_opt)
+    net = build_network(net_opt, scale=args.scale)
     # TODO
     """
     if args.network.startswith("rt4ksr"):

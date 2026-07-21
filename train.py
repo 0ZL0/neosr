@@ -17,6 +17,7 @@ from neosr.data import build_dataloader, build_dataset
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.models import build_model
+from neosr.models.training_utils import normalize_accumulation_steps
 from neosr.utils import (
     AvgTimer,
     MessageLogger,
@@ -32,6 +33,7 @@ from neosr.utils import (
     tc,
 )
 from neosr.utils.options import copy_opt_file, parse_options
+from neosr.utils.validation import resolve_validation_save_img
 
 # minimum supported python version
 if sys.version_info.major != 3 or sys.version_info.minor != 13:
@@ -179,6 +181,9 @@ def train_pipeline(root_path: str) -> None:
     # parse options, set distributed setting, set random seed
     opt, args = parse_options(root_path, is_train=True)
     opt["root_path"] = root_path
+    opt["datasets"]["train"]["accumulate"] = normalize_accumulation_steps(
+        opt["datasets"]["train"].get("accumulate", 1)
+    )
 
     # Triton doesn't support Windows yet
     if sys.platform.startswith("win") and opt.get("compile", False) is True:
@@ -385,7 +390,7 @@ def train_pipeline(root_path: str) -> None:
                             val_loader,
                             int(current_iter_log),
                             tb_logger,
-                            opt["datasets"]["val"].get("save_img", True),
+                            resolve_validation_save_img(val_loader, opt.get("val")),
                         )
 
                 # data_timer.start()
@@ -416,7 +421,7 @@ def train_pipeline(root_path: str) -> None:
                 val_loader,
                 int(current_iter / accumulate),
                 tb_logger,
-                opt["val"].get("save_img", True),
+                resolve_validation_save_img(val_loader, opt.get("val")),
             )
     if tb_logger:
         tb_logger.close()
