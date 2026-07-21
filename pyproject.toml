@@ -1,47 +1,43 @@
-[build-system]
-requires = ["uv_build"]
-build-backend = "uv_build"
-
 [project]
 name = "neosr"
 version = "1.0.0"
-description = "neosr is an open-source framework for training super-resolution models. It provides a comprehensive and reproducible environment for achieving state-of-the-art image restoration results, making it suitable for both the enthusiastic community, professionals and machine learning academic researchers. It serves as a versatile platform and aims to bridge the gap between practical application and academic research in the field."
+description = "An independently maintained super-resolution training framework."
 readme = "readme.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.14"
 keywords = [
   "neosr", "super-resolution", "machine-learning", "image-restoration"
 ]
-authors = [{ name = "neosr-project", email = "132400428+neosr-project@users.noreply.github.com" }]
+maintainers = [{ name = "0ZL0" }]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
-    "einops>=0.8.1",
-    "lmdb>=1.6.2",
-    "numpy>=2.2.6",
-    "onnx>=1.18.0",
-#    "onnxconverter-common>=1.14.0",
-    "onnxruntime-gpu>=1.22.0",
-    "opencv-python-headless>=4.11.0.86",
-    "pyiqa>=0.1.14.1",
-    "pywavelets>=1.8.0",
-    "scipy>=1.15.3",
-    "tb-nightly>=2.20.0a",
+    "einops>=0.8",
+    "lmdb>=1.6",
+    "numpy>=2.2,<2.5",
+    "onnx>=1.18",
+    "onnxruntime-gpu>=1.22",
+    "opencv-python-headless>=4.11",
+    "pyiqa>=0.1.14",
+    "pywavelets>=1.8",
+    "scipy>=1.15",
+    "tensorboard>=2.20",
     "torch>=2.7",
     "torchvision>=0.22",
-    "tqdm>=4.67.1",
-    "triton>=3.3.0; sys_platform == 'linux'",
+    "tqdm>=4.67",
+    "triton>=3.3; sys_platform == 'linux'",
 ]
 
 [project.urls]
-Repository = "https://github.com/neosr-project/neosr"
-Documentation = "https://github.com/neosr-project/neosr/wiki"
+Repository = "https://github.com/0ZL0/neosr"
+Upstream = "https://github.com/neosr-project/neosr"
 
 [tool.uv]
 package = false
-preview = true
 environments = [
     "sys_platform == 'win32'",
     "sys_platform == 'linux'",

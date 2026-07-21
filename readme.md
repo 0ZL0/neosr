@@ -5,18 +5,29 @@ It is intended for local debugging, architecture integration, and experiment wor
 
 For official documentation, installation guidance, configuration details, and other related information, please refer to the official [neosr](https://github.com/neosr-project/neosr) project.
 
-## Quick Start
+## Development
+
+Requirements: Git, [uv](https://docs.astral.sh/uv/), Python 3.11–3.13, and
+an NVIDIA driver compatible with the configured PyTorch build.
+
+Clone the repository and create the locked development environment:
+
+```bash
+git clone https://github.com/0ZL0/neosr.git
+cd neosr
+uv sync --locked
+```
 
 Train:
 
 ```bash
-neosr-train config.toml
+uv run train.py -opt config.toml
 ```
 
 Test:
 
 ```bash
-neosr-test config.toml
+uv run test.py -opt config.toml
 ```
 
 Configuration templates are available in [options](options/).

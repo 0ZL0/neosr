@@ -35,9 +35,9 @@ from neosr.utils import (
 from neosr.utils.options import copy_opt_file, parse_options
 from neosr.utils.validation import resolve_validation_save_img
 
-# minimum supported python version
-if sys.version_info.major != 3 or sys.version_info.minor != 13:
-    msg = f"{tc.red}Python version 3.13 is required.{tc.end}"
+# supported Python versions
+if not (3, 11) <= sys.version_info < (3, 14):
+    msg = f"{tc.red}Python 3.11-3.13 is required.{tc.end}"
     raise ValueError(msg)
 
 
