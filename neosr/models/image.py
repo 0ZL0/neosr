@@ -18,8 +18,10 @@ from neosr.losses.wavelet_guided import wavelet_guided
 from neosr.metrics import calculate_metric
 from neosr.models.base import base
 from neosr.models.training_utils import (
+    accumulation_sync_context,
     advance_accumulation,
     generator_adversarial_loss,
+    grad_scaler_step_succeeded,
     normalize_accumulation_steps,
 )
 from neosr.optimizers import adamw_sf, adan, adan_sf, fsam, soap_sf
@@ -147,9 +149,6 @@ class image(base):
         # LQ matching for Color/Luma losses
         self.match_lq_colors = self.opt["train"].get("match_lq_colors", False)
 
-        # Total expected iters
-        self.total_iter = self.opt["train"].get("total_iter", 200000)
-
         # enable ECO optimization:
         self.eco = self.opt["train"].get("eco", False)
         # ECO alpha scheduling
@@ -166,6 +165,18 @@ class image(base):
         self.accum_iters = normalize_accumulation_steps(
             self.opt["datasets"]["train"].get("accumulate", 1)
         )
+        self._accumulated_log_dict: OrderedDict[str, Tensor] = OrderedDict()
+        self._use_accumulation_no_sync = not self.opt.get(
+            "find_unused_parameters", False
+        )
+        if (
+            self.opt["dist"]
+            and self.accum_iters > 1
+            and not self._use_accumulation_no_sync
+        ):
+            logger.warning(
+                "DDP no_sync is disabled because find_unused_parameters is enabled."
+            )
 
         self.loss_entries = self._build_loss_entries(train_opt.get("losses", []))
         gan_entries = [
@@ -433,7 +444,26 @@ class image(base):
 
         return self.output, self.gt
 
-    def closure(self, current_iter: int):
+    def _accumulate_logs(
+        self, loss_dict: OrderedDict[str, Tensor], *, should_step: bool
+    ) -> None:
+        """Log the mean loss over the full effective batch with one DDP reduce."""
+        for name, value in loss_dict.items():
+            detached_value = value.detach().mean()
+            if name in self._accumulated_log_dict:
+                self._accumulated_log_dict[name] += detached_value
+            else:
+                self._accumulated_log_dict[name] = detached_value.clone()
+
+        if should_step:
+            effective_batch_logs = OrderedDict(
+                (name, value / self.accum_iters)
+                for name, value in self._accumulated_log_dict.items()
+            )
+            self.log_dict = self.reduce_loss_dict(effective_batch_logs)
+            self._accumulated_log_dict.clear()
+
+    def closure(self, current_iter: int, *, should_step: bool = True):
         if self.net_d is not None:
             for p in self.net_d.parameters():  # type: ignore[reportAttributeAccessIssue,operator]
                 p.requires_grad = False
@@ -473,7 +503,7 @@ class image(base):
                 with torch.no_grad():
                     combined_HF, combined_HF_gt = wavelet_guided(self.output, self.gt)
 
-            l_g_total: Tensor = torch.zeros(1)
+            l_g_total = self.output.new_zeros(())
             loss_dict = OrderedDict()
 
             for loss_entry in self.loss_entries:
@@ -501,17 +531,16 @@ class image(base):
         loss_dict["l_g_total"] = l_g_total
 
         # divide losses by accumulation factor
-        l_g_total /= self.accum_iters
-        l_g_total.detach()
+        scaled_g_total = l_g_total / self.accum_iters
 
         # backward generator
         if self.sam and current_iter >= self.sam_init:
-            l_g_total.backward()
+            scaled_g_total.backward()
         else:
-            self.gradscaler_g.scale(l_g_total).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            self.gradscaler_g.scale(scaled_g_total).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
         if (
-            self.n_accumulated % self.accum_iters == 0
+            should_step
             and self.gradclip
             and not (self.sam is not None and current_iter >= self.sam_init)
         ):
@@ -543,11 +572,9 @@ class image(base):
                     l_d_real = self.cri_gan(
                         real_d_pred, target_is_real=True, is_disc=True
                     )
-
-                    l_d_real /= self.accum_iters
-
                     loss_dict["l_d_real"] = l_d_real
                     loss_dict["out_d_real"] = torch.mean(real_d_pred.detach())
+                    scaled_d_real = l_d_real / self.accum_iters
 
                     # fake
                     if self.wavelet_guided and current_iter >= self.wavelet_init:
@@ -558,32 +585,27 @@ class image(base):
                     l_d_fake = self.cri_gan(
                         fake_d_pred, target_is_real=False, is_disc=True
                     )
-
-                    l_d_fake /= self.accum_iters
-
                     loss_dict["l_d_fake"] = l_d_fake
                     loss_dict["out_d_fake"] = torch.mean(fake_d_pred.detach())
+                    scaled_d_fake = l_d_fake / self.accum_iters
 
                     # add total discriminator loss for tensorboard tracking
                     loss_dict["l_d_total"] = (l_d_real + l_d_fake) / 2
-
-                    l_d_real.detach()
-                    l_d_fake.detach()
 
                     # switch to train mode
                     self.net_d.train()
 
                     # backward discriminator
                     if self.sam and current_iter >= self.sam_init:
-                        l_d_real.backward()
-                        l_d_fake.backward()
+                        scaled_d_real.backward()
+                        scaled_d_fake.backward()
                     else:
-                        self.gradscaler_d.scale(l_d_real).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                        self.gradscaler_d.scale(l_d_fake).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                        self.gradscaler_d.scale(scaled_d_real).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                        self.gradscaler_d.scale(scaled_d_fake).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
             # clip discriminator
             if (
-                self.n_accumulated % self.accum_iters == 0
+                should_step
                 and self.gradclip
                 and not (self.sam is not None and current_iter >= self.sam_init)
             ):
@@ -606,48 +628,96 @@ class image(base):
                   """
             raise ValueError(msg)
 
-        # average losses among gpu's, if doing distributed training
-        self.log_dict = self.reduce_loss_dict(loss_dict)
+        self._accumulate_logs(loss_dict, should_step=should_step)
 
         # return generator loss
-        return l_g_total
+        return scaled_g_total
 
-    def optimize_parameters(self, current_iter: int) -> None:
-        self.n_accumulated, should_step = advance_accumulation(
+    def optimize_parameters(self, current_iter: int) -> bool:
+        """Process one micro-batch and report an effective-batch boundary."""
+        next_accumulated, should_step = advance_accumulation(
             self.n_accumulated, self.accum_iters
         )
 
-        # run forward-backward
-        self.closure(current_iter)
+        # DDP synchronizes only the final backward pass of an effective batch.
+        should_sync = should_step or not self._use_accumulation_no_sync
+        with accumulation_sync_context(
+            (self.net_g, self.net_d), should_sync=should_sync
+        ):
+            self.closure(current_iter, should_step=should_step)
+        self.n_accumulated = next_accumulated
 
-        if should_step:
-            # step() for generator
-            if self.sam and current_iter >= self.sam_init:
-                self.sam_optimizer_g.step(self.closure, current_iter)
+        if not should_step:
+            return False
+
+        sam_active = bool(self.sam and current_iter >= self.sam_init)
+        generator_scale = (
+            None if sam_active else self.gradscaler_g.get_scale()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        )
+        discriminator_scale = (
+            self.gradscaler_d.get_scale()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            if self.net_d is not None and not sam_active
+            else None
+        )
+
+        # step() for generator
+        if sam_active:
+            self.sam_optimizer_g.step(self.closure, current_iter)
+        else:
+            self.gradscaler_g.step(self.optimizer_g)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        # step() for discriminator
+        if self.net_d is not None:
+            if sam_active:
+                self.optimizer_d.step()
             else:
-                self.gradscaler_g.step(self.optimizer_g)  # type: ignore[reportFunctionMemberAccess,attr-defined]
-            # step() for discriminator
-            if self.net_d is not None:
                 self.gradscaler_d.step(self.optimizer_d)  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
-            # zero generator grads
-            if self.sam and current_iter >= self.sam_init:
-                self.sam_optimizer_g.zero_grad(set_to_none=True)
-            else:
-                # update gradscaler
-                self.gradscaler_g.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                if self.net_d is not None:
-                    self.gradscaler_d.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                self.optimizer_g.zero_grad(set_to_none=True)
-
-            # zero discriminator grads
+        # zero generator grads
+        if sam_active:
+            self.sam_optimizer_g.zero_grad(set_to_none=True)
+        else:
+            # update gradscaler once after the effective batch is complete
+            self.gradscaler_g.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
             if self.net_d is not None:
-                self.optimizer_d.zero_grad(set_to_none=True)
+                self.gradscaler_d.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            self.optimizer_g.zero_grad(set_to_none=True)
 
-            if self.ema > 0:
+        # zero discriminator grads
+        if self.net_d is not None:
+            self.optimizer_d.zero_grad(set_to_none=True)
+
+        if sam_active:
+            generator_step_succeeded = True
+        else:
+            if generator_scale is None:
+                msg = "Generator GradScaler state was not captured before stepping."
+                raise RuntimeError(msg)
+            generator_step_succeeded = grad_scaler_step_succeeded(
+                generator_scale,
+                self.gradscaler_g.get_scale(),  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            )
+        self.optimizer_step_succeeded = [generator_step_succeeded]
+        discriminator_step_succeeded = False
+        if self.net_d is not None:
+            if sam_active:
+                discriminator_step_succeeded = True
+            else:
+                if discriminator_scale is None:
+                    msg = "Discriminator GradScaler state was not captured before stepping."
+                    raise RuntimeError(msg)
+                discriminator_step_succeeded = grad_scaler_step_succeeded(
+                    discriminator_scale,
+                    self.gradscaler_d.get_scale(),  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                )
+            self.optimizer_step_succeeded.append(discriminator_step_succeeded)
+
+        if self.ema > 0:
+            if generator_step_succeeded:
                 self.net_g_ema.update_parameters(self.net_g)  # type: ignore[reportArgumentType,arg-type]
-                if self.net_d is not None:
-                    self.net_d_ema.update_parameters(self.net_d)  # type: ignore[reportArgumentType,arg-type]
+            if self.net_d is not None and discriminator_step_succeeded:
+                self.net_d_ema.update_parameters(self.net_d)  # type: ignore[reportArgumentType,arg-type]
+
+        return True
 
     def tile_val(self) -> Tensor:
         b, c, h, w = self.lq.shape

@@ -32,6 +32,12 @@ dependencies = [
     "triton>=3.3; sys_platform == 'linux'",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.9",
+]
+
 [project.urls]
 Repository = "https://github.com/0ZL0/neosr"
 Upstream = "https://github.com/neosr-project/neosr"

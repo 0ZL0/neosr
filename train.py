@@ -1,6 +1,5 @@
 import datetime
 import logging
-import math
 import re
 import sys
 import time
@@ -17,7 +16,7 @@ from neosr.data import build_dataloader, build_dataset
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.models import build_model
-from neosr.models.training_utils import normalize_accumulation_steps
+from neosr.models.training_utils import AccumulationPlan, normalize_accumulation_steps
 from neosr.utils import (
     AvgTimer,
     MessageLogger,
@@ -62,9 +61,11 @@ def init_tb_loggers(opt: dict[str, Any]):
 
 def create_train_val_dataloader(
     opt: dict[str, Any], logger: logging.Logger
-) -> tuple[data.DataLoader | None, Sampler, list[data.DataLoader], int, int]:
+) -> tuple[data.DataLoader, Sampler, list[data.DataLoader], AccumulationPlan]:
     # create train and val dataloaders
     train_loader, val_loaders = None, []
+    train_sampler: Sampler | None = None
+    accumulation_plan: AccumulationPlan | None = None
 
     for phase, dataset_opt in opt["datasets"].items():
         if phase == "train":
@@ -86,14 +87,20 @@ def create_train_val_dataloader(
                 seed=opt["manual_seed"],
             )
 
-            accumulate = opt["datasets"]["train"].get("accumulate", 1)
-            num_iter_per_epoch = math.ceil(
-                len(train_set)  # type: ignore[reportArgumentType]
-                * dataset_enlarge_ratio
-                / (dataset_opt["batch_size"] * accumulate * opt["world_size"])
+            accumulation_steps = normalize_accumulation_steps(
+                dataset_opt.get("accumulate", 1)
             )
-            total_iters = int(opt["logger"].get("total_iter", 1000000) * accumulate)
-            total_epochs: int = math.ceil(total_iters / num_iter_per_epoch)
+            accumulation_plan = AccumulationPlan(
+                total_optimizer_steps=int(opt["logger"].get("total_iter", 1_000_000)),
+                accumulation_steps=accumulation_steps,
+                micro_batches_per_epoch=len(train_loader),
+            )
+            process_batch_size = int(
+                train_loader.batch_size or dataset_opt["batch_size"]
+            )
+            effective_batch_size = (
+                process_batch_size * opt["world_size"] * accumulation_steps
+            )
             logger.info(
                 "Training informations:"
                 f"\n-------- Starting model: {opt['name']}"
@@ -101,9 +108,12 @@ def create_train_val_dataloader(
                 f"\n-------- Patch size: {dataset_opt['patch_size']}"
                 f"\n-------- Dataset size: {len(train_set)}"  # type: ignore[reportArgumentType]
                 f"\n-------- Batch size per gpu: {dataset_opt['batch_size']}"
-                f"\n-------- Accumulated batches: {dataset_opt['batch_size'] * accumulate}"
-                f"\n-------- Required iters per epoch: {num_iter_per_epoch}"
-                f"\n-------- Total epochs {total_epochs} for total iters {total_iters // accumulate}."
+                f"\n-------- Gradient accumulation steps: {accumulation_steps}"
+                f"\n-------- Effective global batch size: {effective_batch_size}"
+                f"\n-------- Micro-batches per epoch: {accumulation_plan.micro_batches_per_epoch}"
+                f"\n-------- Total micro-batches: {accumulation_plan.total_micro_batches}"
+                f"\n-------- Total epochs: {accumulation_plan.total_epochs}"
+                f"\n-------- Total optimizer steps: {accumulation_plan.total_optimizer_steps}."
             )
         elif phase.split("_")[0] == "val":
             val_set = build_dataset(dataset_opt)
@@ -122,7 +132,10 @@ def create_train_val_dataloader(
             logger.error(msg)
             sys.exit(1)
 
-    return train_loader, train_sampler, val_loaders, total_epochs, total_iters  # type: ignore[reportPossiblyUnboundVariable]
+    if train_loader is None or train_sampler is None or accumulation_plan is None:
+        msg = "A training dataset must be configured under datasets.train."
+        raise ValueError(msg)
+    return train_loader, train_sampler, val_loaders, accumulation_plan
 
 
 def load_resume_state(opt: dict[str, Any]):
@@ -242,7 +255,7 @@ def train_pipeline(root_path: str) -> None:
 
     # create train and validation dataloaders
     result = create_train_val_dataloader(opt, logger)
-    train_loader, train_sampler, val_loaders, total_epochs, total_iters = result
+    train_loader, train_sampler, val_loaders, accumulation_plan = result
 
     # create model
     model = build_model(opt)
@@ -253,21 +266,36 @@ def train_pipeline(root_path: str) -> None:
         logger.info(
             f"{tc.light_green}Resuming training from epoch: {resume_state['epoch']}, iter: {int(resume_state['iter'])}{tc.end}"
         )
-        start_epoch = resume_state["epoch"]
-        current_iter = int(
-            resume_state["iter"] * opt["datasets"]["train"].get("accumulate", 1)
-        )
+        start_epoch = int(resume_state["epoch"])
+        current_optimizer_step = int(resume_state["iter"])
+        checkpoint_accumulation = resume_state.get("accumulation_steps")
+        if (
+            checkpoint_accumulation is not None
+            and checkpoint_accumulation != accumulation_plan.accumulation_steps
+        ):
+            logger.warning(
+                "Gradient accumulation changed while resuming: "
+                f"{checkpoint_accumulation} -> {accumulation_plan.accumulation_steps}. "
+                "This changes the effective batch size."
+            )
         torch.cuda.empty_cache()
     else:
         start_epoch = 0
-        current_iter = 0
+        current_optimizer_step = 0
+
+    if current_optimizer_step > accumulation_plan.total_optimizer_steps:
+        msg = (
+            "The resume checkpoint is already past the configured total_iter: "
+            f"{current_optimizer_step} > {accumulation_plan.total_optimizer_steps}."
+        )
+        raise ValueError(msg)
+    current_micro_batch = current_optimizer_step * accumulation_plan.accumulation_steps
 
     # create message logger (formatted outputs)
-    msg_logger = MessageLogger(opt, tb_logger, current_iter)
+    msg_logger = MessageLogger(opt, tb_logger, current_optimizer_step)
 
     # dataloader prefetcher
-    if train_loader is not None:
-        prefetcher = CUDAPrefetcher(train_loader, opt)
+    prefetcher = CUDAPrefetcher(train_loader, opt)
 
     # log AMP (automatic mixed precision)
     if opt.get("use_amp", False) and opt.get("bfloat16", False):
@@ -308,95 +336,117 @@ def train_pipeline(root_path: str) -> None:
         logger.info("Deterministic mode enabled.")
 
     # training log vars
-    accumulate = opt["datasets"]["train"].get("accumulate", 1)
     print_freq = opt["logger"].get("print_freq", 100)
     save_checkpoint_freq = opt["logger"]["save_checkpoint_freq"]
     val_freq = opt["val"]["val_freq"] if opt.get("val") is not None else 100
 
     # training
     logger.info(
-        f"{tc.light_green}Start training from epoch: {start_epoch}, iter: {int(current_iter / accumulate)}{tc.end}"
+        f"{tc.light_green}Start training from epoch: {start_epoch}, iter: {current_optimizer_step}{tc.end}"
     )
     # data_timer, iter_timer = AvgTimer(), AvgTimer()
     iter_timer = AvgTimer()
     start_time = time.time()
+    first_optimizer_step = current_optimizer_step + 1
+    epoch = start_epoch
 
     try:
-        for epoch in range(start_epoch, total_epochs + 1):
+        while current_micro_batch < accumulation_plan.total_micro_batches:
             train_sampler.set_epoch(epoch)  # type: ignore[attr-defined]
-            prefetcher.reset()  # type: ignore[reportPossiblyUnboundVariable]
-            train_data = prefetcher.next()  # type: ignore[reportPossiblyUnboundVariable]
+            prefetcher.reset()
+            train_data = prefetcher.next()
 
-            while train_data is not None:
+            while (
+                train_data is not None
+                and current_micro_batch < accumulation_plan.total_micro_batches
+            ):
                 # data_timer.record()
 
-                current_iter += 1
-                if current_iter > total_iters:
-                    break
+                current_micro_batch += 1
+                pending_optimizer_step = (
+                    accumulation_plan.optimizer_step_for_micro_batch(
+                        current_micro_batch
+                    )
+                )
+                expected_update_boundary = accumulation_plan.should_step(
+                    current_micro_batch
+                )
+
                 # training
                 model.feed_data(train_data)  # type: ignore[reportAttributeAccessIssue,attr-defined]
-                model.optimize_parameters(current_iter)  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                # update learning rate
-                model.update_learning_rate(  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                    current_iter, warmup_iter=opt["train"].get("warmup_iter", -1)
+                completed_effective_batch = model.optimize_parameters(  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                    pending_optimizer_step
                 )
-                iter_timer.record()
-                if current_iter == 1:
-                    # reset start time in msg_logger for more accurate eta_time
-                    # doesn't work in resume mode
-                    msg_logger.reset_start_time()
-
-                # log
-                if current_iter >= accumulate:
-                    current_iter_log = current_iter / accumulate
-                else:
-                    current_iter_log = current_iter
-
-                if current_iter_log % print_freq == 0:
-                    log_vars = {"epoch": epoch, "iter": current_iter_log}
-                    log_vars.update({"lrs": model.get_current_learning_rate()})  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                    log_vars.update({
-                        "time": iter_timer.get_avg_time()
-                        # "data_time": data_timer.get_avg_time(),
-                    })
-                    log_vars.update(model.get_current_log())  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                    msg_logger(log_vars)
-
-                # save models and training states
-                if current_iter_log % save_checkpoint_freq == 0:
-                    # check if there's enough disk space
-                    free_space = check_disk_space()
-                    if free_space < 500:
-                        msg = f"""
-                        {tc.red}
-                        Not enough free disk space in {Path.cwd()}.
-                        Please free up at least 500 MB of space.
-                        Attempting to save current progress...
-                        {tc.end}
-                        """
-                        logger.error(msg)
-                        model.save(epoch, int(current_iter_log))  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                        sys.exit(1)
-
-                    logger.info(
-                        f"{tc.light_green}Saving models and training states.{tc.end}"
+                if completed_effective_batch != expected_update_boundary:
+                    msg = (
+                        "Model and training-loop accumulation state diverged at "
+                        f"micro-batch {current_micro_batch}."
                     )
-                    model.save(epoch, int(current_iter_log))  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                    raise RuntimeError(msg)
 
-                # validation
-                if opt.get("val") is not None and (current_iter_log % val_freq == 0):
-                    for val_loader in val_loaders:
-                        model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                            val_loader,
-                            int(current_iter_log),
-                            tb_logger,
-                            resolve_validation_save_img(val_loader, opt.get("val")),
+                if completed_effective_batch:
+                    current_optimizer_step = pending_optimizer_step
+                    # Schedulers and warm-up advance once per optimizer update.
+                    model.update_learning_rate(  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                        current_optimizer_step,
+                        warmup_iter=opt["train"].get("warmup_iter", -1),
+                    )
+                    iter_timer.record()
+                    if current_optimizer_step == first_optimizer_step:
+                        # Exclude initialization and the first update from ETA.
+                        msg_logger.reset_start_time()
+
+                    # log
+                    if current_optimizer_step % print_freq == 0:
+                        log_vars = {"epoch": epoch, "iter": current_optimizer_step}
+                        log_vars.update({
+                            "lrs": model.get_current_learning_rate()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                        })
+                        log_vars.update({
+                            "time": iter_timer.get_avg_time()
+                            # "data_time": data_timer.get_avg_time(),
+                        })
+                        log_vars.update(model.get_current_log())  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                        msg_logger(log_vars)
+
+                    # save models and training states
+                    if current_optimizer_step % save_checkpoint_freq == 0:
+                        # check if there's enough disk space
+                        free_space = check_disk_space()
+                        if free_space < 500:
+                            msg = f"""
+                            {tc.red}
+                            Not enough free disk space in {Path.cwd()}.
+                            Please free up at least 500 MB of space.
+                            Attempting to save current progress...
+                            {tc.end}
+                            """
+                            logger.error(msg)
+                            model.save(epoch, current_optimizer_step)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                            sys.exit(1)
+
+                        logger.info(
+                            f"{tc.light_green}Saving models and training states.{tc.end}"
                         )
+                        model.save(epoch, current_optimizer_step)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+
+                    # validation
+                    if (
+                        opt.get("val") is not None
+                        and current_optimizer_step % val_freq == 0
+                    ):
+                        for val_loader in val_loaders:
+                            model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                                val_loader,
+                                current_optimizer_step,
+                                tb_logger,
+                                resolve_validation_save_img(val_loader, opt.get("val")),
+                            )
 
                 # data_timer.start()
-                iter_timer.start()
-                train_data = prefetcher.next()  # type: ignore[reportPossiblyUnboundVariable]
+                train_data = prefetcher.next()
             # end of iter
+            epoch += 1
 
         # end of epoch
 
@@ -411,15 +461,14 @@ def train_pipeline(root_path: str) -> None:
     except KeyboardInterrupt:
         msg = f"{tc.light_green}Interrupted, saving latest models.{tc.end}"
         logger.info(msg)
-        model.save(epoch, int(current_iter_log))  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        model.save(epoch, current_optimizer_step)  # type: ignore[reportFunctionMemberAccess,attr-defined]
         sys.exit(0)
 
     if opt.get("val") is not None:
-        accumulate = opt["datasets"]["train"].get("accumulate", 1)
         for val_loader in val_loaders:
             model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
                 val_loader,
-                int(current_iter / accumulate),
+                current_optimizer_step,
                 tb_logger,
                 resolve_validation_save_img(val_loader, opt.get("val")),
             )

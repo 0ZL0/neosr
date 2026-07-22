@@ -32,6 +32,7 @@ class base:
         self.optimizer_d: Optimizer
         self.log_dict: dict[str, Any]
         self.n_accumulated: int
+        self.optimizer_step_succeeded: list[bool] | None = None
         self._print_different_keys_loading: Callable
 
         if self.is_train:
@@ -48,8 +49,9 @@ class base:
     def feed_data(self, data: dict[str, str | Tensor]) -> None:
         pass
 
-    def optimize_parameters(self, current_iter: int) -> None:
-        pass
+    def optimize_parameters(self, current_iter: int) -> bool:
+        del current_iter
+        return False
 
     def get_current_visuals(self) -> OrderedDict | None:
         pass
@@ -208,7 +210,9 @@ class base:
             net = net.module
         return net
 
-    def _set_lr(self, lr_groups_l) -> None:
+    def _set_lr(
+        self, lr_groups_l, optimizer_step_succeeded: list[bool] | None = None
+    ) -> None:
         """Set learning rate for warm-up.
 
         Args:
@@ -216,7 +220,13 @@ class base:
             lr_groups_l (list): List for lr_groups, each for an optimizer.
 
         """
-        for optimizer, lr_groups in zip(self.optimizers, lr_groups_l, strict=True):
+        if optimizer_step_succeeded is None:
+            optimizer_step_succeeded = [True] * len(self.optimizers)
+        for optimizer, lr_groups, step_succeeded in zip(
+            self.optimizers, lr_groups_l, optimizer_step_succeeded, strict=True
+        ):
+            if not step_succeeded:
+                continue
             for param_group, lr in zip(optimizer.param_groups, lr_groups, strict=True):
                 param_group["lr"] = lr
 
@@ -239,9 +249,21 @@ class base:
                 Default: -1.
 
         """
-        if current_iter > 0 and self.n_accumulated == 0:
-            for scheduler in self.schedulers:
-                scheduler.step()
+        optimizer_step_succeeded = getattr(self, "optimizer_step_succeeded", None)
+        if optimizer_step_succeeded is None:
+            optimizer_step_succeeded = [True] * len(self.optimizers)
+        if len(optimizer_step_succeeded) != len(self.optimizers):
+            msg = "Optimizer step results do not match the configured optimizers."
+            raise RuntimeError(msg)
+        if self.schedulers and len(self.schedulers) != len(self.optimizers):
+            msg = "Schedulers and optimizers must have matching lengths."
+            raise RuntimeError(msg)
+        if current_iter > 0 and self.schedulers:
+            for scheduler, step_succeeded in zip(
+                self.schedulers, optimizer_step_succeeded, strict=True
+            ):
+                if step_succeeded:
+                    scheduler.step()
         # set up warm-up learning rate
         if current_iter < warmup_iter:
             # get initial lr for each group
@@ -254,7 +276,7 @@ class base:
                 for init_lr_g in init_lr_g_l
             ])
             # set learning rate
-            self._set_lr(warm_up_lr_l)
+            self._set_lr(warm_up_lr_l, optimizer_step_succeeded)
 
     def get_current_learning_rate(self):
         return [param_group["lr"] for param_group in self.optimizers[0].param_groups]
@@ -433,16 +455,24 @@ class base:
 
         """
         if current_iter != -1:
-            state = {
+            state: dict[str, Any] = {
                 "epoch": epoch,
                 "iter": current_iter,
                 "optimizers": [],
                 "schedulers": [],
+                "accumulation_steps": getattr(self, "accum_iters", 1),
             }
             for o in self.optimizers:
                 state["optimizers"].append(o.state_dict())  # type: ignore[attr-defined]
             for s in self.schedulers:
                 state["schedulers"].append(s.state_dict())  # type: ignore[attr-defined]
+            grad_scalers = {}
+            for name in ("gradscaler_g", "gradscaler_d"):
+                scaler = getattr(self, name, None)
+                if scaler is not None and (scaler_state := scaler.state_dict()):
+                    grad_scalers[name] = scaler_state
+            if grad_scalers:
+                state["grad_scalers"] = grad_scalers
             save_filename = f"{int(current_iter)}.state"
             save_path = Path(self.opt["path"]["training_states"]) / save_filename
 
@@ -500,6 +530,17 @@ class base:
             self.optimizers[i].load_state_dict(o)
         for i, s in enumerate(resume_schedulers):
             self.schedulers[i].load_state_dict(s)
+
+        resume_grad_scalers = resume_state.get("grad_scalers", {})
+        for name, scaler_state in resume_grad_scalers.items():
+            scaler = getattr(self, name, None)
+            if scaler is not None:
+                scaler.load_state_dict(scaler_state)
+        if self.opt.get("use_amp", False) and not resume_grad_scalers:
+            logger = get_root_logger()
+            logger.warning(
+                "The checkpoint has no AMP GradScaler state; resuming with a fresh scale."
+            )
 
         torch.cuda.empty_cache()
         gc.collect()

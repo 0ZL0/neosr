@@ -113,7 +113,6 @@ class MessageLogger:
     def __init__(self, opt: dict[str, Any], tb_logger, start_iter: int = 1) -> None:
         self.exp_name = opt["name"]
         self.interval = opt["logger"].get("print_freq", 100)
-        self.accumulate = opt["datasets"]["train"].get("accumulate", 1)
         self.start_iter = start_iter
         self.max_iters = opt["logger"].get("total_iter", 1000000)
         self.use_tb_logger = opt["logger"]["use_tb_logger"]
@@ -140,7 +139,7 @@ class MessageLogger:
         """
         # epoch, iter, learning rates
         epoch: int = log_vars.pop("epoch")
-        current_iter: int = int(log_vars.pop("iter")) // self.accumulate
+        current_iter: int = int(log_vars.pop("iter"))
         lrs: list[Any] = log_vars.pop("lrs")
 
         message = (
@@ -150,7 +149,6 @@ class MessageLogger:
         # time and estimated time
         if "time" in log_vars:
             iter_time = 1 / log_vars.pop("time")
-            iter_time /= self.accumulate
 
             total_time = time.time() - self.start_time
 

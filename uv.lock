@@ -1075,6 +1075,12 @@ dependencies = [
     { name = "triton", marker = "sys_platform == 'linux'" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "ruff", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "einops", specifier = ">=0.8" },
@@ -1091,6 +1097,12 @@ requires-dist = [
     { name = "torchvision", specifier = ">=0.22", index = "https://download.pytorch.org/whl/cu128" },
     { name = "tqdm", specifier = ">=4.67" },
     { name = "triton", marker = "sys_platform == 'linux'", specifier = ">=3.3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "ruff", specifier = ">=0.9" },
 ]
 
 [[package]]
