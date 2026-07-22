@@ -45,6 +45,11 @@ Configuration templates are available in [options](options/).
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)                                             | `esrgan`                               			|
 | [SRVGGNetCompact](https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/archs/srvgg_arch.py) | `compact`                              			|
 | [SwinIR](https://github.com/JingyunLiang/SwinIR)                                                  | `swinir_small`, `swinir_medium`        			|
+| [Swin2SR](https://github.com/mv-lab/swin2sr)                                                      | `swin2sr`                              			|
+| [EDSR](https://github.com/sanghyun-son/EDSR-PyTorch)                                             | `edsr`                                 			|
+| [RLFN](https://github.com/bytedance/RLFN)                                                        | `rlfn`, `rlfn_s`, `rlfn_prune`, `rlfn_ntire`             |
+| [ELAN](https://github.com/xindongzhang/ELAN)                                                     | `elan`                                 			|
+| [GRL](https://github.com/ofsoundof/GRL-Image-Restoration)                                        | `grl_tiny`, `grl_small`, `grl_base`, `realgrl`            |
 | [HAT](https://github.com/XPixelGroup/HAT)                                                         | `hat_s`, `hat_m`, `hat_l`              			|
 | [DVMSR](https://github.com/nathan66666/DVMSR)                                                     | `dvmsr`                                			|
 | [PFT-SR](https://github.com/LabShuHangGU/PFT-SR)                                                  | `pftsr`, `pftsr_light`                 			|
