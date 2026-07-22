@@ -1,0 +1,50 @@
+name = "train_hr_downsample"
+model_type = "image"
+scale = 4
+use_amp = true
+bfloat16 = true
+fast_matmul = true
+
+[datasets.train]
+type = "hr_downsample"
+dataroot_gt = '/path/to/hr/'
+patch_size = 64
+batch_size = 8
+downsample_mode = "bicubic"
+antialias = true
+pad_if_smaller = true
+use_hflip = true
+use_rot = true
+
+[datasets.val]
+name = "val"
+type = "hr_downsample"
+dataroot_gt = '/path/to/val/hr/'
+downsample_mode = "bicubic"
+antialias = true
+
+[path]
+
+[network_g]
+type = "esc"
+
+[train]
+ema = 0.999
+
+[train.optim_g]
+type = "adan_sf"
+lr = 5e-4
+betas = [0.98, 0.92, 0.99]
+weight_decay = 0.01
+schedule_free = true
+warmup_steps = 1600
+
+[[train.losses]]
+name = "mssim"
+type = "builtin:mssim"
+weight = 1.0
+
+[logger]
+total_iter = 1000000
+save_checkpoint_freq = 1000
+use_tb_logger = true
