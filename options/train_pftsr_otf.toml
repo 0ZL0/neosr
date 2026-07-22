@@ -84,6 +84,9 @@ val_freq = 1000
 [network_g]
 type = "pftsr"
 #type = "pftsr_light"
+# Optional native CUDA forward backend:
+#type = "pftsr_cuda"
+#type = "pftsr_light_cuda"
 
 [network_d]
 type = "metagan"

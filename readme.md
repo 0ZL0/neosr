@@ -34,7 +34,7 @@ Configuration templates are available in [options](options/).
 
 ## Notes
 
-- `pftsr` / `pftsr_light` strongly depend on `smm_cuda` to achieve normal performance. Without it, inference may consume very large compute and VRAM resources. A local Windows build is available here for reference only: [smm_cuda-1.0-cp313-cp313-win_amd64.whl](wheels_for_windows/smm_cuda-1.0-cp313-cp313-win_amd64.whl). This wheel was built against Python 3.13, PyTorch 2.7.0+cu128, CUDA Toolkit 12.8, and MSVC 2022 on Windows.
+- `pftsr` / `pftsr_light` are self-contained and use a bounded-memory PyTorch SMM implementation that supports training and AMP. `pftsr_cuda` / `pftsr_light_cuda` select the optional native CUDA forward backend and fail explicitly when `smm_cuda` is unavailable; their backward pass still uses the corrected PyTorch implementation. A build-specific Windows wheel is available for reference: [smm_cuda-1.0-cp313-cp313-win_amd64.whl](wheels_for_windows/smm_cuda-1.0-cp313-cp313-win_amd64.whl). It targets Python 3.13, PyTorch 2.7.0+cu128, CUDA Toolkit 12.8, and MSVC 2022.
 - `dvmsr` depends on the optional `mamba_ssm` library. It is imported only when
   `dvmsr` is selected; other architectures do not require it.
 
@@ -52,7 +52,7 @@ Configuration templates are available in [options](options/).
 | [GRL](https://github.com/ofsoundof/GRL-Image-Restoration)                                        | `grl_tiny`, `grl_small`, `grl_base`, `realgrl`            |
 | [HAT](https://github.com/XPixelGroup/HAT)                                                         | `hat_s`, `hat_m`, `hat_l`              			|
 | [DVMSR](https://github.com/nathan66666/DVMSR)                                                     | `dvmsr`                                			|
-| [PFT-SR](https://github.com/LabShuHangGU/PFT-SR)                                                  | `pftsr`, `pftsr_light`                 			|
+| [PFT-SR](https://github.com/LabShuHangGU/PFT-SR)                                                  | `pftsr`, `pftsr_light`, `pftsr_cuda`, `pftsr_light_cuda` |
 | [OmniSR](https://github.com/Francis0625/Omni-SR)                                                  | `omnisr`                               			|
 | [SRFormer](https://github.com/HVision-NKU/SRFormer)                                               | `srformer_light`, `srformer_medium`    			|
 | [DAT](https://github.com/zhengchen1999/dat)                                                       | `dat_small`, `dat_medium`, `dat_2` 			|

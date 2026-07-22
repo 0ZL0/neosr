@@ -16,10 +16,12 @@ dataroot_lq = 'C:\datasets\val\'
 [network_g]
 type = "pftsr"
 #type = "pftsr_light"
+# Optional native CUDA forward backend:
+#type = "pftsr_cuda"
+#type = "pftsr_light_cuda"
 
 [path]
 # Recommended x4 official weights:
 pretrain_network_g = 'D:\Model\PFT-SR\003_PFT_SRx4_finetune.pth'
 #pretrain_network_g = 'D:\Model\PFT-SR\103_PFT_light_SRx4_finetune.pth'
 strict_load_g = true
-
