@@ -15,20 +15,19 @@ import torch.utils.checkpoint as checkpoint
 from torch.nn.init import trunc_normal_
 
 from neosr.archs.arch_util import net_opt, to_2tuple
-from neosr.archs.grl.mixed_attn_block_efficient_arch import (
+from neosr.archs.grl_arch_util import (
     EfficientMixAttnTransformerBlock,
+    Upsample,
+    UpsampleOneStep,
     _get_stripe_info,
-)
-from neosr.archs.grl.ops_arch import (
     bchw_to_blc,
     blc_to_bchw,
+    build_last_conv,
     calculate_mask,
     calculate_mask_all,
     get_relative_coords_table_all,
     get_relative_position_index_simple,
 )
-from neosr.archs.grl.swin_v1_block_arch import build_last_conv
-from neosr.archs.grl.upsample_arch import Upsample, UpsampleOneStep
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, _ = net_opt()
