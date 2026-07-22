@@ -10,13 +10,17 @@ from typing import Any
 
 import torch
 from torch.utils import data
-from torch.utils.data.sampler import Sampler
 
 from neosr.data import build_dataloader, build_dataset
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.models import build_model
-from neosr.models.training_utils import AccumulationPlan, normalize_accumulation_steps
+from neosr.models.training_utils import (
+    AccumulationPlan,
+    ResumePosition,
+    normalize_accumulation_steps,
+    resume_position,
+)
 from neosr.utils import (
     AvgTimer,
     MessageLogger,
@@ -29,9 +33,11 @@ from neosr.utils import (
     make_exp_dirs,
     mkdir_and_rename,
     scandir,
+    set_random_seed,
     tc,
 )
 from neosr.utils.options import copy_opt_file, parse_options
+from neosr.utils.rng import preserve_rng_state
 from neosr.utils.validation import resolve_validation_save_img
 
 # supported Python versions
@@ -61,10 +67,10 @@ def init_tb_loggers(opt: dict[str, Any]):
 
 def create_train_val_dataloader(
     opt: dict[str, Any], logger: logging.Logger
-) -> tuple[data.DataLoader, Sampler, list[data.DataLoader], AccumulationPlan]:
+) -> tuple[data.DataLoader, EnlargedSampler, list[data.DataLoader], AccumulationPlan]:
     # create train and val dataloaders
     train_loader, val_loaders = None, []
-    train_sampler: Sampler | None = None
+    train_sampler: EnlargedSampler | None = None
     accumulation_plan: AccumulationPlan | None = None
 
     for phase, dataset_opt in opt["datasets"].items():
@@ -75,7 +81,11 @@ def create_train_val_dataloader(
                 dataset_opt.update(opt["degradations"])
             train_set = build_dataset(dataset_opt)
             train_sampler = EnlargedSampler(
-                train_set, opt["world_size"], opt["rank"], dataset_enlarge_ratio
+                train_set,
+                opt["world_size"],
+                opt["rank"],
+                dataset_enlarge_ratio,
+                seed=opt["manual_seed"],
             )
             num_gpu = opt.get("num_gpu", "auto")
             train_loader = build_dataloader(
@@ -158,8 +168,35 @@ def load_resume_state(opt: dict[str, Any]):
         resume_state = None
     else:
         resume_state = torch.load(
-            resume_state_path, map_location=torch.device("cuda"), weights_only=True
+            resume_state_path, map_location="cpu", weights_only=True
         )
+        training_progress = resume_state.get("training_progress", {})
+        saved_sampler_seed = (
+            training_progress.get("sampler_seed")
+            if isinstance(training_progress, dict)
+            else None
+        )
+        if (
+            not opt["deterministic"]
+            and not isinstance(saved_sampler_seed, bool)
+            and isinstance(saved_sampler_seed, int)
+        ):
+            # A configuration without manual_seed gets a fresh seed on every
+            # launch. Reuse the checkpoint seed before constructing the sampler.
+            opt["manual_seed"] = saved_sampler_seed
+            set_random_seed(saved_sampler_seed + opt["rank"])
+        if resume_state.get("distributed_rank_states", False):
+            rank_state_path = (
+                Path(resume_state_path).parent
+                / "rank_states"
+                / f"{int(resume_state['iter'])}.rank{opt['rank']}.state"
+            )
+            if not rank_state_path.exists():
+                msg = f"Missing per-rank resume state: {rank_state_path}"
+                raise FileNotFoundError(msg)
+            resume_state["rank_state"] = torch.load(
+                rank_state_path, map_location="cpu", weights_only=True
+            )
         check_resume(opt, resume_state["iter"])
     return resume_state
 
@@ -197,6 +234,12 @@ def train_pipeline(root_path: str) -> None:
     opt["datasets"]["train"]["accumulate"] = normalize_accumulation_steps(
         opt["datasets"]["train"].get("accumulate", 1)
     )
+    if opt["dist"] and not opt["deterministic"]:
+        # Keep an automatically generated sampler seed common across ranks.
+        shared_seed = torch.tensor(opt["manual_seed"], device="cuda", dtype=torch.int64)
+        torch.distributed.broadcast(shared_seed, src=0)
+        opt["manual_seed"] = int(shared_seed.item())
+        set_random_seed(opt["manual_seed"] + opt["rank"])
 
     # Triton doesn't support Windows yet
     if sys.platform.startswith("win") and opt.get("compile", False) is True:
@@ -256,6 +299,7 @@ def train_pipeline(root_path: str) -> None:
     # create train and validation dataloaders
     result = create_train_val_dataloader(opt, logger)
     train_loader, train_sampler, val_loaders, accumulation_plan = result
+    process_batch_size = int(train_loader.batch_size or 1)
 
     # create model
     model = build_model(opt)
@@ -266,30 +310,20 @@ def train_pipeline(root_path: str) -> None:
         logger.info(
             f"{tc.light_green}Resuming training from epoch: {resume_state['epoch']}, iter: {int(resume_state['iter'])}{tc.end}"
         )
-        start_epoch = int(resume_state["epoch"])
-        current_optimizer_step = int(resume_state["iter"])
-        checkpoint_accumulation = resume_state.get("accumulation_steps")
-        if (
-            checkpoint_accumulation is not None
-            and checkpoint_accumulation != accumulation_plan.accumulation_steps
-        ):
+        position = resume_position(resume_state, accumulation_plan, train_sampler.seed)
+        if "training_progress" not in resume_state:
             logger.warning(
-                "Gradient accumulation changed while resuming: "
-                f"{checkpoint_accumulation} -> {accumulation_plan.accumulation_steps}. "
-                "This changes the effective batch size."
+                "Legacy checkpoint has no explicit data cursor; reconstructing it "
+                "from optimizer steps and accumulation metadata."
             )
         torch.cuda.empty_cache()
     else:
-        start_epoch = 0
-        current_optimizer_step = 0
+        position = resume_position(None, accumulation_plan, train_sampler.seed)
 
-    if current_optimizer_step > accumulation_plan.total_optimizer_steps:
-        msg = (
-            "The resume checkpoint is already past the configured total_iter: "
-            f"{current_optimizer_step} > {accumulation_plan.total_optimizer_steps}."
-        )
-        raise ValueError(msg)
-    current_micro_batch = current_optimizer_step * accumulation_plan.accumulation_steps
+    start_epoch = position.epoch
+    current_optimizer_step = position.optimizer_step
+    current_micro_batch = position.global_micro_batch
+    batch_in_epoch = position.batch_in_epoch
 
     # create message logger (formatted outputs)
     msg_logger = MessageLogger(opt, tb_logger, current_optimizer_step)
@@ -349,10 +383,24 @@ def train_pipeline(root_path: str) -> None:
     start_time = time.time()
     first_optimizer_step = current_optimizer_step + 1
     epoch = start_epoch
+    checkpoint_safe = True
+
+    def save_resumable_checkpoint() -> None:
+        progress_epoch, progress_batch = divmod(
+            current_micro_batch, accumulation_plan.micro_batches_per_epoch
+        )
+        progress = ResumePosition(
+            current_optimizer_step, current_micro_batch, progress_epoch, progress_batch
+        ).state_dict(accumulation_plan, train_sampler.seed)
+        model.save(  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            progress_epoch, current_optimizer_step, progress
+        )
 
     try:
         while current_micro_batch < accumulation_plan.total_micro_batches:
-            train_sampler.set_epoch(epoch)  # type: ignore[attr-defined]
+            train_sampler.set_epoch(
+                epoch, start_index=batch_in_epoch * process_batch_size
+            )
             prefetcher.reset()
             train_data = prefetcher.next()
 
@@ -362,14 +410,16 @@ def train_pipeline(root_path: str) -> None:
             ):
                 # data_timer.record()
 
-                current_micro_batch += 1
+                # From here until a complete effective-batch update (including its
+                # scheduler step) is committed, gradients/model/RNG form an
+                # in-flight transaction that cannot be resumed from disk.
+                checkpoint_safe = False
+                next_micro_batch = current_micro_batch + 1
                 pending_optimizer_step = (
-                    accumulation_plan.optimizer_step_for_micro_batch(
-                        current_micro_batch
-                    )
+                    accumulation_plan.optimizer_step_for_micro_batch(next_micro_batch)
                 )
                 expected_update_boundary = accumulation_plan.should_step(
-                    current_micro_batch
+                    next_micro_batch
                 )
 
                 # training
@@ -380,9 +430,11 @@ def train_pipeline(root_path: str) -> None:
                 if completed_effective_batch != expected_update_boundary:
                     msg = (
                         "Model and training-loop accumulation state diverged at "
-                        f"micro-batch {current_micro_batch}."
+                        f"micro-batch {next_micro_batch}."
                     )
                     raise RuntimeError(msg)
+                current_micro_batch = next_micro_batch
+                batch_in_epoch += 1
 
                 if completed_effective_batch:
                     current_optimizer_step = pending_optimizer_step
@@ -391,6 +443,7 @@ def train_pipeline(root_path: str) -> None:
                         current_optimizer_step,
                         warmup_iter=opt["train"].get("warmup_iter", -1),
                     )
+                    checkpoint_safe = True
                     iter_timer.record()
                     if current_optimizer_step == first_optimizer_step:
                         # Exclude initialization and the first update from ETA.
@@ -422,31 +475,36 @@ def train_pipeline(root_path: str) -> None:
                             {tc.end}
                             """
                             logger.error(msg)
-                            model.save(epoch, current_optimizer_step)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                            save_resumable_checkpoint()
                             sys.exit(1)
 
                         logger.info(
                             f"{tc.light_green}Saving models and training states.{tc.end}"
                         )
-                        model.save(epoch, current_optimizer_step)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                        save_resumable_checkpoint()
 
-                    # validation
+                    # Validation is observational and must not move the training
+                    # RNG stream past the state captured in the checkpoint above.
                     if (
                         opt.get("val") is not None
                         and current_optimizer_step % val_freq == 0
                     ):
-                        for val_loader in val_loaders:
-                            model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                                val_loader,
-                                current_optimizer_step,
-                                tb_logger,
-                                resolve_validation_save_img(val_loader, opt.get("val")),
-                            )
+                        with preserve_rng_state():
+                            for val_loader in val_loaders:
+                                model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                                    val_loader,
+                                    current_optimizer_step,
+                                    tb_logger,
+                                    resolve_validation_save_img(
+                                        val_loader, opt.get("val")
+                                    ),
+                                )
 
                 # data_timer.start()
                 train_data = prefetcher.next()
             # end of iter
             epoch += 1
+            batch_in_epoch = 0
 
         # end of epoch
 
@@ -459,9 +517,17 @@ def train_pipeline(root_path: str) -> None:
         model.save(epoch=-1, current_iter=-1)  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
     except KeyboardInterrupt:
-        msg = f"{tc.light_green}Interrupted, saving latest models.{tc.end}"
-        logger.info(msg)
-        model.save(epoch, current_optimizer_step)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        if checkpoint_safe:
+            msg = f"{tc.light_green}Interrupted, saving resumable state.{tc.end}"
+            logger.info(msg)
+            save_resumable_checkpoint()
+        else:
+            logger.warning(
+                "Interrupted inside an accumulation window. Partial gradients are "
+                "not checkpoint-safe; saving inference weights only and preserving "
+                "the previous resumable checkpoint."
+            )
+            model.save(epoch=-1, current_iter=-1)  # type: ignore[reportFunctionMemberAccess,attr-defined]
         sys.exit(0)
 
     if opt.get("val") is not None:

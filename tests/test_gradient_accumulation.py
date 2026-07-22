@@ -10,10 +10,12 @@ from torch import nn
 import neosr.models.training_utils as training_utils
 from neosr.models.training_utils import (
     AccumulationPlan,
+    ResumePosition,
     accumulation_sync_context,
     advance_accumulation,
     grad_scaler_step_succeeded,
     normalize_accumulation_steps,
+    resume_position,
 )
 from neosr.utils.logger import MessageLogger
 
@@ -86,6 +88,61 @@ def test_plan_rejects_out_of_range_micro_batch() -> None:
         plan.optimizer_step_for_micro_batch(0)
     with pytest.raises(ValueError, match="micro_batch must be between"):
         plan.should_step(plan.total_micro_batches + 1)
+
+
+def test_resume_position_restores_epoch_offset_across_epoch_boundaries() -> None:
+    plan = AccumulationPlan(
+        total_optimizer_steps=20, accumulation_steps=4, micro_batches_per_epoch=10
+    )
+    position = ResumePosition(3, 12, 1, 2)
+    state = {
+        "epoch": 1,
+        "iter": 3,
+        "accumulation_steps": 4,
+        "training_progress": position.state_dict(plan),
+    }
+
+    assert resume_position(state, plan) == position
+
+
+def test_exact_resume_rejects_changed_sampler_seed() -> None:
+    plan = AccumulationPlan(20, 4, 10)
+    progress = ResumePosition(3, 12, 1, 2).state_dict(plan, sampler_seed=9)
+    state = {
+        "epoch": 1,
+        "iter": 3,
+        "accumulation_steps": 4,
+        "training_progress": progress,
+    }
+
+    with pytest.raises(ValueError, match="sampler seed"):
+        resume_position(state, plan, sampler_seed=10)
+
+
+def test_legacy_resume_position_is_reconstructed_from_optimizer_steps() -> None:
+    plan = AccumulationPlan(
+        total_optimizer_steps=20, accumulation_steps=4, micro_batches_per_epoch=10
+    )
+
+    assert resume_position({"iter": 2, "accumulation_steps": 4}, plan) == (
+        ResumePosition(2, 8, 0, 8)
+    )
+
+
+def test_exact_resume_rejects_accumulation_or_loader_length_changes() -> None:
+    old_plan = AccumulationPlan(20, 4, 10)
+    progress = ResumePosition(3, 12, 1, 2).state_dict(old_plan)
+
+    with pytest.raises(ValueError, match="cannot change"):
+        resume_position(
+            {"iter": 3, "accumulation_steps": 4, "training_progress": progress},
+            AccumulationPlan(20, 2, 10),
+        )
+    with pytest.raises(ValueError, match="micro_batches_per_epoch"):
+        resume_position(
+            {"iter": 3, "accumulation_steps": 4, "training_progress": progress},
+            AccumulationPlan(20, 4, 11),
+        )
 
 
 @pytest.mark.parametrize("value", [True, 1.5, "4"])

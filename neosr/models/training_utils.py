@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 
@@ -57,6 +57,92 @@ class AccumulationPlan:
                 f"{self.total_micro_batches}, got {micro_batch}"
             )
             raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class ResumePosition:
+    """Normalized position of the next micro-batch to consume."""
+
+    optimizer_step: int
+    global_micro_batch: int
+    epoch: int
+    batch_in_epoch: int
+
+    def state_dict(
+        self, plan: AccumulationPlan, sampler_seed: int | None = None
+    ) -> dict[str, object]:
+        state: dict[str, object] = {
+            "version": 1,
+            "micro_batches_per_epoch": plan.micro_batches_per_epoch,
+            "global_micro_batch": self.global_micro_batch,
+        }
+        if sampler_seed is not None:
+            state["sampler_seed"] = sampler_seed
+        return state
+
+
+def resume_position(
+    resume_state: Mapping[str, object] | None,
+    plan: AccumulationPlan,
+    sampler_seed: int | None = None,
+) -> ResumePosition:
+    """Resolve and validate the exact data position for fresh or resumed training."""
+    if resume_state is None:
+        return ResumePosition(0, 0, 0, 0)
+
+    optimizer_step = resume_state.get("iter")
+    if isinstance(optimizer_step, bool) or not isinstance(optimizer_step, int):
+        msg = "Checkpoint iter must be an integer."
+        raise TypeError(msg)
+    if not 0 <= optimizer_step <= plan.total_optimizer_steps:
+        msg = (
+            "Checkpoint iter must be between 0 and "
+            f"{plan.total_optimizer_steps}, got {optimizer_step}."
+        )
+        raise ValueError(msg)
+
+    checkpoint_accumulation = resume_state.get("accumulation_steps")
+    if checkpoint_accumulation is not None and (
+        checkpoint_accumulation != plan.accumulation_steps
+    ):
+        msg = (
+            "Gradient accumulation cannot change during exact resumption: "
+            f"{checkpoint_accumulation} -> {plan.accumulation_steps}."
+        )
+        raise ValueError(msg)
+
+    expected_micro_batch = optimizer_step * plan.accumulation_steps
+    epoch, batch_in_epoch = divmod(expected_micro_batch, plan.micro_batches_per_epoch)
+    position = ResumePosition(
+        optimizer_step, expected_micro_batch, epoch, batch_in_epoch
+    )
+    progress = resume_state.get("training_progress")
+    if progress is None:
+        return position
+    if not isinstance(progress, Mapping):
+        msg = "Checkpoint training_progress must be a mapping."
+        raise TypeError(msg)
+
+    if sampler_seed is not None and progress.get("sampler_seed") != sampler_seed:
+        msg = "Training sampler seed changed since the checkpoint."
+        raise ValueError(msg)
+
+    expected_progress = {
+        "version": 1,
+        "micro_batches_per_epoch": plan.micro_batches_per_epoch,
+        "global_micro_batch": expected_micro_batch,
+    }
+    for name, expected_value in expected_progress.items():
+        if progress.get(name) != expected_value:
+            msg = (
+                f"Checkpoint training progress [{name}] is inconsistent: "
+                f"{progress.get(name)} -> {expected_value}."
+            )
+            raise ValueError(msg)
+    if resume_state.get("epoch") != epoch:
+        msg = "Checkpoint epoch metadata disagrees with its training-progress cursor."
+        raise ValueError(msg)
+    return position
 
 
 def normalize_accumulation_steps(value: object) -> int:

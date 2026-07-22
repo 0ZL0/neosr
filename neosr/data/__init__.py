@@ -8,10 +8,10 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.utils.data
 from torch.utils import data
 from torch.utils.data.sampler import Sampler
 
+from neosr.data.data_sampler import EnlargedSampler, SeededDataset
 from neosr.utils import get_root_logger, scandir
 from neosr.utils.dist_util import get_dist_info
 from neosr.utils.registry import DATASET_REGISTRY
@@ -102,8 +102,11 @@ def build_dataloader(
             multiplier = 1 if num_gpu == 0 else num_gpu
             batch_size = dataset_opt["batch_size"] * multiplier
             num_workers *= multiplier
+        loader_dataset = (
+            SeededDataset(dataset) if isinstance(sampler, EnlargedSampler) else dataset
+        )
         dataloader_args = {
-            "dataset": dataset,
+            "dataset": loader_dataset,
             "batch_size": batch_size,
             "shuffle": False,
             "num_workers": num_workers,
@@ -118,6 +121,12 @@ def build_dataloader(
             if seed is not None
             else None
         )
+        if seed is not None:
+            # DataLoader draws its worker base seed on PyTorch's default device.
+            # Match that device while keeping the draw off the global RNG stream.
+            loader_generator = torch.Generator(device=torch.get_default_device())
+            loader_generator.manual_seed(seed + rank)
+            dataloader_args["generator"] = loader_generator
 
     # val
     elif phase in {"val", "test"}:

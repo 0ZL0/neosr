@@ -82,13 +82,16 @@ class CUDAPrefetcher:
 
     def __init__(self, loader: DataLoader, opt: dict[str, Any]) -> None:
         self.ori_loader = loader
-        self.loader = iter(loader)
+        self.loader = None
         self.opt = opt
         self.stream = torch.cuda.Stream()
         self.device = torch.device("cuda")
-        self.preload()
+        self.batch = None
 
     def preload(self) -> None:
+        if self.loader is None:
+            self.batch = None
+            return
         try:
             self.batch = next(self.loader)  # self.batch is a dict
         except StopIteration:

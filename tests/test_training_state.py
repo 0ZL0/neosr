@@ -49,12 +49,22 @@ def test_training_state_round_trips_grad_scaler_and_accumulation_metadata(
         patch("neosr.models.base.torch.cuda.empty_cache"),
         patch("neosr.models.base.gc.collect"),
     ):
-        model.save_training_state(epoch=3, current_iter=7)
+        model.save_training_state(
+            epoch=2,
+            current_iter=7,
+            training_progress={
+                "version": 1,
+                "global_micro_batch": 28,
+                "micro_batches_per_epoch": 10,
+            },
+        )
 
     state_path = tmp_path / "7.state"
     state = torch.load(state_path, map_location="cpu", weights_only=True)
     assert state["iter"] == 7
     assert state["accumulation_steps"] == 4
+    assert state["training_progress"]["global_micro_batch"] == 28
+    assert "rng_state" in state["rank_state"]
     assert state["grad_scalers"]["gradscaler_g"] == {"scale": 32.0}
 
     resumed_model = _make_base_model(tmp_path)

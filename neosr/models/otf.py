@@ -1,4 +1,5 @@
 import random
+from collections.abc import Mapping
 from typing import Any, cast
 
 import torch
@@ -281,6 +282,34 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
             self.lq = data["lq"].to(device=self.device, non_blocking=True)  # type: ignore[union-attr]
             if "gt" in data:
                 self.gt = data["gt"].to(device=self.device, non_blocking=True)  # type: ignore[union-attr]
+
+    def get_training_state(self) -> dict[str, Any]:
+        state = super().get_training_state()
+        if hasattr(self, "queue_lr"):
+            state["otf_queue"] = {
+                "lr": self.queue_lr.detach().cpu(),
+                "gt": self.queue_gt.detach().cpu(),
+                "ptr": self.queue_ptr,
+                "size": self.queue_size,
+            }
+        else:
+            state["otf_queue"] = None
+        return state
+
+    def load_training_state(self, state: Mapping[str, Any]) -> None:
+        super().load_training_state(state)
+        queue_state = state.get("otf_queue")
+        if queue_state is None:
+            return
+        if queue_state["size"] != self.queue_size:
+            msg = (
+                "OTF queue size changed since the checkpoint: "
+                f"{queue_state['size']} -> {self.queue_size}."
+            )
+            raise ValueError(msg)
+        self.queue_lr = queue_state["lr"].to(self.device, non_blocking=True)
+        self.queue_gt = queue_state["gt"].to(self.device, non_blocking=True)
+        self.queue_ptr = int(queue_state["ptr"])
 
     def nondist_validation(
         self, dataloader, current_iter: int, tb_logger, save_img: bool = True

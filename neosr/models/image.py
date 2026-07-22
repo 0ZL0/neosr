@@ -1,6 +1,7 @@
 import math
 import sys
 from collections import OrderedDict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -100,6 +101,8 @@ class image(base):
                     multi_avg_fn=get_ema_multi_avg_fn(self.ema),
                     device=self.device,
                 )
+            if self.opt["path"].get("resume_state") is not None:
+                self._load_resume_ema_networks()
 
         # sharpness-aware minimization
         self.sam = self.opt["train"].get("sam", None)
@@ -278,6 +281,27 @@ class image(base):
             """
             logger.error(msg)
             sys.exit(1)
+
+    def _load_resume_ema_networks(self) -> None:
+        """Load EMA weights separately from the raw networks used by optimizers."""
+        networks = [("g", "generator", self.net_g_ema.module)]
+        if self.net_d is not None:
+            networks.append(("d", "discriminator", self.net_d_ema.module))
+        for suffix, label, network in networks:
+            load_path = self.opt["path"].get(f"pretrain_network_{suffix}")
+            if load_path is None:
+                continue
+            loaded_key = self.load_network(
+                network,
+                load_path,
+                "params_ema",
+                self.opt["path"].get(f"strict_load_{suffix}", True),
+            )
+            if loaded_key not in {"params_ema", "params-ema"}:
+                get_root_logger().warning(
+                    f"Legacy {label} checkpoint has no separate EMA weights; "
+                    "exact raw/optimizer pairing cannot be reconstructed."
+                )
 
     def _build_loss_entries(
         self, losses_opt: list[dict[str, Any]]
@@ -949,20 +973,57 @@ class image(base):
             out_dict["gt"] = self.gt.detach().cpu()
         return out_dict
 
-    def save(self, epoch: int, current_iter: int) -> None:
-        """Save networks and training state."""
+    def get_training_state(self) -> dict[str, Any]:
+        state = super().get_training_state()
         if self.ema > 0:
-            self.save_network(self.net_g_ema, "net_g", current_iter)
-        else:
-            self.save_network(self.net_g, "net_g", current_iter)
+            ema_n_averaged = {"net_g": self.net_g_ema.n_averaged.detach().cpu()}
+            if self.net_d is not None:
+                ema_n_averaged["net_d"] = self.net_d_ema.n_averaged.detach().cpu()
+            state["ema_n_averaged"] = ema_n_averaged
+        return state
 
+    def load_training_state(self, state: Mapping[str, Any]) -> None:
+        super().load_training_state(state)
+        if self.ema <= 0:
+            return
+        ema_n_averaged = state.get("ema_n_averaged")
+        if ema_n_averaged is None:
+            get_root_logger().warning(
+                "The checkpoint has no EMA update counters; the first resumed EMA "
+                "update will use legacy initialization semantics."
+            )
+            return
+        self.net_g_ema.n_averaged.copy_(
+            ema_n_averaged["net_g"].to(self.net_g_ema.n_averaged)
+        )
         if self.net_d is not None:
-            if self.ema > 0:
-                self.save_network(self.net_d_ema, "net_d", current_iter)
-            else:
-                self.save_network(self.net_d, "net_d", current_iter)
+            self.net_d_ema.n_averaged.copy_(
+                ema_n_averaged["net_d"].to(self.net_d_ema.n_averaged)
+            )
 
-        self.save_training_state(epoch, current_iter)
+    def save(
+        self,
+        epoch: int,
+        current_iter: int,
+        training_progress: Mapping[str, object] | None = None,
+    ) -> None:
+        """Save networks and training state."""
+        networks = [("net_g", self.net_g, getattr(self, "net_g_ema", None))]
+        if self.net_d is not None:
+            networks.append(("net_d", self.net_d, getattr(self, "net_d_ema", None)))
+        for label, raw_network, ema_network in networks:
+            if self.ema > 0:
+                assert ema_network is not None
+                self.save_network(
+                    [raw_network, ema_network],
+                    label,
+                    current_iter,
+                    param_key=["params", "params_ema"],
+                )
+            else:
+                self.save_network(raw_network, label, current_iter)
+
+        self.save_training_state(epoch, current_iter, training_progress)
 
     def _print_different_keys_loading(
         self, crt_net, load_net: dict[Any, Any], strict: bool = True

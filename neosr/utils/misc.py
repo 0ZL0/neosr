@@ -157,13 +157,9 @@ def check_resume(opt: dict[str, Any], resume_iter: int) -> None:
                 opt["path"][name] = (
                     Path(opt["path"]["models"]) / f"net_{basename}_{resume_iter}.pth"
                 )
-
-        # change param_key to params in resume
-        param_keys = [key for key in opt["path"] if key.startswith("param_key")]
-        for param_key in param_keys:
-            if opt["path"][param_key] == "params_ema":
-                opt["path"][param_key] = "params"
-                # print(f'Set {param_key} to params')
+                # Optimizer state always belongs to the raw network. EMA is loaded
+                # independently after the training model has been constructed.
+                opt["path"][f"param_key_{basename}"] = "params"
 
 
 @staticmethod

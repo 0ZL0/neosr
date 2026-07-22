@@ -2,6 +2,7 @@ import gc
 import sys
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -13,7 +14,8 @@ from torch.optim.optimizer import Optimizer
 
 from neosr.optimizers import adamw_sf, adamw_win, adan, adan_sf, soap_sf
 from neosr.utils import get_root_logger, tc
-from neosr.utils.dist_util import master_only
+from neosr.utils.dist_util import get_dist_info, master_only
+from neosr.utils.rng import capture_rng_state, restore_rng_state
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,8 +58,21 @@ class base:
     def get_current_visuals(self) -> OrderedDict | None:
         pass
 
-    def save(self, epoch: int, current_iter: int) -> None:
-        pass
+    def save(
+        self,
+        epoch: int,
+        current_iter: int,
+        training_progress: Mapping[str, object] | None = None,
+    ) -> None:
+        del epoch, current_iter, training_progress
+
+    def get_training_state(self) -> dict[str, Any]:
+        """Return model-specific mutable state not owned by an optimizer."""
+        return {}
+
+    def load_training_state(self, state: Mapping[str, Any]) -> None:
+        """Restore state returned by :meth:`get_training_state`."""
+        del state
 
     def dist_validation(
         self, dataloader, current_iter: int, tb_logger, save_img: bool = True
@@ -378,8 +393,8 @@ class base:
             self.optimizer_d.train()  # type: ignore[attr-defined]
 
     def load_network(
-        self, net: nn.Module, load_path: str, param_key: str, strict: bool = True
-    ) -> None:
+        self, net: nn.Module, load_path: str, param_key: str | None, strict: bool = True
+    ) -> str | None:
         """Load network.
 
         Args:
@@ -392,7 +407,6 @@ class base:
                 Default: None.
 
         """
-        self.param_key = param_key
         logger = get_root_logger()
         net = self.get_bare_model(net)
 
@@ -402,22 +416,32 @@ class base:
             logger.error(msg)
             sys.exit(0)
 
-        load_net = torch.load(
-            load_path, map_location=torch.device("cuda"), weights_only=True
-        )
+        # Paired raw+EMA checkpoints contain two full parameter sets. Stage them
+        # on CPU so resumption does not transiently require several model copies
+        # in VRAM.
+        load_net = torch.load(load_path, map_location="cpu", weights_only=True)
 
-        try:
-            if "params-ema" in load_net:
-                param_key = "params-ema"
-            elif "params_ema" in load_net:
-                param_key = "params_ema"
-            elif "params" in load_net:
-                param_key = "params"
-            else:
-                param_key = self.param_key
-            load_net = load_net[param_key]
-        except:
-            pass
+        if isinstance(load_net, Mapping):
+            available_param_keys = [
+                key for key in ("params-ema", "params_ema", "params") if key in load_net
+            ]
+            selected_param_key = param_key
+            if selected_param_key == "params_ema" and "params-ema" in load_net:
+                selected_param_key = "params-ema"
+            elif selected_param_key == "params-ema" and "params_ema" in load_net:
+                selected_param_key = "params_ema"
+            if selected_param_key not in load_net:
+                if selected_param_key is not None and available_param_keys:
+                    logger.warning(
+                        f"Param key [{selected_param_key}] is unavailable in {load_path}; "
+                        f"falling back to [{available_param_keys[0]}]."
+                    )
+                selected_param_key = (
+                    available_param_keys[0] if available_param_keys else None
+                )
+            if selected_param_key is not None:
+                load_net = load_net[selected_param_key]
+            param_key = selected_param_key
 
         if param_key:
             logger.info(
@@ -442,9 +466,14 @@ class base:
 
         torch.cuda.empty_cache()
         gc.collect()
+        return param_key
 
-    @master_only
-    def save_training_state(self, epoch: int, current_iter: int) -> None:
+    def save_training_state(
+        self,
+        epoch: int,
+        current_iter: int,
+        training_progress: Mapping[str, object] | None = None,
+    ) -> None:
         """Save training states during training, which will be used for
         resuming.
 
@@ -455,6 +484,26 @@ class base:
 
         """
         if current_iter != -1:
+            rank, world_size = get_dist_info()
+            rank_state = {
+                "rng_state": capture_rng_state(),
+                "model_training_state": self.get_training_state(),
+            }
+            distributed = world_size > 1
+            if distributed:
+                rank_state_dir = (
+                    Path(self.opt["path"]["training_states"]) / "rank_states"
+                )
+                rank_state_dir.mkdir(parents=True, exist_ok=True)
+                rank_state_path = (
+                    rank_state_dir / f"{int(current_iter)}.rank{rank}.state"
+                )
+                torch.save(rank_state, rank_state_path)
+                torch.distributed.barrier()
+            if rank != 0:
+                torch.distributed.barrier()
+                return
+
             state: dict[str, Any] = {
                 "epoch": epoch,
                 "iter": current_iter,
@@ -462,6 +511,12 @@ class base:
                 "schedulers": [],
                 "accumulation_steps": getattr(self, "accum_iters", 1),
             }
+            if training_progress is not None:
+                state["training_progress"] = dict(training_progress)
+            if distributed:
+                state["distributed_rank_states"] = True
+            else:
+                state["rank_state"] = rank_state
             for o in self.optimizers:
                 state["optimizers"].append(o.state_dict())  # type: ignore[attr-defined]
             for s in self.schedulers:
@@ -507,6 +562,9 @@ class base:
             if self.net_d is not None and self.sf_optim_d and self.is_train:
                 self.optimizer_d.train()  # type: ignore[attr-defined]
 
+            if distributed:
+                torch.distributed.barrier()
+
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -540,6 +598,17 @@ class base:
             logger = get_root_logger()
             logger.warning(
                 "The checkpoint has no AMP GradScaler state; resuming with a fresh scale."
+            )
+
+        rank_state = resume_state.get("rank_state")
+        if rank_state is not None:
+            self.load_training_state(rank_state.get("model_training_state", {}))
+            restore_rng_state(rank_state["rng_state"])
+        else:
+            logger = get_root_logger()
+            logger.warning(
+                "The checkpoint has no per-rank model/RNG state; exact resumption "
+                "is unavailable for this legacy checkpoint."
             )
 
         torch.cuda.empty_cache()
