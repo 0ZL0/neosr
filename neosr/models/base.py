@@ -361,16 +361,23 @@ class base:
                     f.flush()
                     os.fsync(f.fileno())
                 tmp.replace(path)
-            except OSError:
-                tmp.unlink(missing_ok=True)
+            except (OSError, RuntimeError) as exc:
+                # torch.save reports failures from its C++ zip writer as
+                # RuntimeError once the first record is through, so catching
+                # OSError alone would miss most of a full disk.
                 logger.warning(
-                    f"{tc.red}Save {what} error. "
+                    f"{tc.red}Save {what} error ({exc}). "
                     f"Remaining retry times: {attempts - attempt}{tc.end}"
                 )
                 if attempt < attempts:
                     time.sleep(1)
             else:
                 return
+            finally:
+                # Cleanup only, no control flow: a successful attempt has already
+                # renamed the temporary away, and an interrupt must not leave a
+                # partial file behind either.
+                tmp.unlink(missing_ok=True)
 
         msg = f"{tc.red}Cannot save {path}, aborting.{tc.end}"
         logger.error(msg)

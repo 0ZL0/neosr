@@ -91,7 +91,7 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
     @torch.no_grad()
     def feed_data(self, data: dict[str, str | Tensor]) -> None:
         """Accept data from dataloader, and then add two-order degradations to obtain LQ images."""
-        if self.is_train:
+        if self.is_train and not self._validating:
             # training data synthesis
             self.gt = data["gt"].to(device=self.device, non_blocking=True)  # type: ignore[union-attr]
 
@@ -300,11 +300,3 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
         self.queue_lr = queue_state["lr"].to(self.device, non_blocking=True)
         self.queue_gt = queue_state["gt"].to(self.device, non_blocking=True)
         self.queue_ptr = int(queue_state["ptr"])
-
-    def nondist_validation(
-        self, dataloader, current_iter: int, tb_logger, save_img: bool = True
-    ) -> None:
-        # do not use the synthetic process during validation
-        self.is_train = False
-        super().nondist_validation(dataloader, current_iter, tb_logger, save_img)
-        self.is_train = True
