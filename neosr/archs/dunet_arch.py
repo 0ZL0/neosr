@@ -1,6 +1,6 @@
 # type: ignore
 from torch import Tensor, nn
-from torch.nn.utils import spectral_norm
+from torch.nn.utils.parametrizations import spectral_norm
 
 from neosr.archs.arch_util import DySample
 from neosr.utils.registry import ARCH_REGISTRY

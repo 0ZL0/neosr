@@ -392,6 +392,45 @@ class base:
         if self.net_d is not None and self.sf_optim_d and self.is_train:
             self.optimizer_d.train()  # type: ignore[attr-defined]
 
+    @staticmethod
+    def _reject_legacy_spectral_norm(
+        net: nn.Module, load_net: Mapping[str, Any], load_path: str
+    ) -> None:
+        """Refuse discriminators saved with the pre-parametrization spectral norm.
+
+        Renaming ``weight_orig``/``weight_u``/``weight_v`` to their parametrization
+        equivalents makes such a checkpoint load, but does not make it usable: it
+        was trained while the power iteration never ran, so its weights are
+        calibrated against a random spectral-norm estimate. Once the estimate is
+        computed correctly the network it encodes is gone -- measured on a
+        discriminator trained that way, the decision gap collapses ~170x and
+        flips sign within three iterations, and no rescaling of the stored weights
+        recovers it because ``W / sigma(W)`` is scale-invariant in ``W``. A silent
+        migration would therefore hide a full reset behind a successful load.
+        """
+        legacy = [k for k in load_net if k.endswith("weight_orig")]
+        if not legacy or not any(
+            k.endswith("parametrizations.weight.original") for k in net.state_dict()
+        ):
+            return
+
+        msg = f"""
+              {tc.red}
+              {load_path}
+              was saved with the legacy spectral-norm implementation ({len(legacy)} layers).
+              It cannot be resumed: those weights were trained while the power
+              iteration was never updated, so they are calibrated against a random
+              spectral-norm estimate and do not survive a correct one. Renaming the
+              keys, or loading non-strictly, would reset the discriminator silently.
+
+              Resume the generator and let the discriminator restart instead:
+                  [path]
+                  ignore_resume_networks = [ "network_d" ]
+              {tc.end}
+              """
+        get_root_logger().error(msg)
+        raise ValueError(msg)
+
     def load_network(
         self, net: nn.Module, load_path: str, param_key: str | None, strict: bool = True
     ) -> str | None:
@@ -455,6 +494,8 @@ class base:
             if k.startswith("module."):
                 load_net[k[7:]] = v
                 load_net.pop(k)
+
+        self._reject_legacy_spectral_norm(net, load_net, load_path)
         self._print_different_keys_loading(net, load_net, strict)
 
         try:

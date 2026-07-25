@@ -3,7 +3,7 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
-from torch.nn.utils import spectral_norm
+from torch.nn.utils.parametrizations import spectral_norm
 
 from neosr.archs.arch_util import DropPath
 from neosr.utils.registry import ARCH_REGISTRY
@@ -37,7 +37,6 @@ class Attention(nn.Module):
         self.attention_dim = self.num_heads * self.head_dim
 
         self.qkv = nn.Linear(dim, self.attention_dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
         self.dropout_p = attn_drop
         self.proj = nn.Linear(self.attention_dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -53,7 +52,11 @@ class Attention(nn.Module):
         q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
 
         x = nn.functional.scaled_dot_product_attention(
-            q, k, v, scale=self.scale, dropout_p=self.dropout_p
+            q,
+            k,
+            v,
+            scale=self.scale,
+            dropout_p=self.dropout_p if self.training else 0.0,
         )
         x = x.transpose(1, 2).reshape(B, H, W, self.attention_dim)
         x = self.proj(x)
@@ -152,7 +155,7 @@ class metagan(nn.Module):
         blocks: Sequence[int] = (3, 3, 9, 3),
         downs: Sequence[int] = (4, 4, 2, 2),
         drop_path=0.02,
-        end_drop=0.2,
+        end_drop=0.0,
     ):
         super().__init__()
         dims = [in_ch, *list(dims)]

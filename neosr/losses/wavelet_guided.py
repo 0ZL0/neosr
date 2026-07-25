@@ -344,10 +344,12 @@ class SWTForward(nn.Module):
             h0_row,  # type: ignore[reportArgumentType]
             h1_row,  # type: ignore[reportArgumentType]
         )
-        self.h0_col = nn.Parameter(filts[0])
-        self.h1_col = nn.Parameter(filts[1])
-        self.h0_row = nn.Parameter(filts[2])
-        self.h1_row = nn.Parameter(filts[3])
+        # Constants, not learnable: as parameters they would pull the fixed
+        # wavelet filters into the autograd graph of every branch that uses them.
+        self.register_buffer("h0_col", filts[0])
+        self.register_buffer("h1_col", filts[1])
+        self.register_buffer("h0_row", filts[2])
+        self.register_buffer("h1_row", filts[3])
 
         self.J = J
         self.mode = mode
@@ -383,8 +385,13 @@ class SWTForward(nn.Module):
         return coeffs
 
 
-@torch.no_grad()
 def wavelet_guided(output: Tensor, gt: Tensor) -> tuple[Tensor, Tensor]:
+    """Split ``output`` and ``gt`` into the high-frequency bands the discriminator sees.
+
+    The transform is differentiable on purpose: the returned ``combined_HF``
+    carries the generator's gradient path, and the discriminator detaches it for
+    its own fake sample.
+    """
     # wavelet = pywt.Wavelet("sym7")  # type: ignore[reportAttributeAccessIssue]
     wavelet = pywt.Wavelet("sym19")  # type: ignore[reportAttributeAccessIssue]
     dlo = wavelet.dec_lo

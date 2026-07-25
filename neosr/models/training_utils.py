@@ -204,11 +204,13 @@ def accumulation_sync_context(
 def generator_adversarial_loss(
     discriminator: nn.Module, output: Tensor, criterion: Callable[..., Tensor]
 ) -> Tensor:
-    """Evaluate a frozen discriminator while retaining gradients to ``output``."""
-    was_training = discriminator.training
-    discriminator.eval()
-    try:
-        prediction = discriminator(output)
-        return criterion(prediction, target_is_real=True, is_disc=False)
-    finally:
-        discriminator.train(was_training)
+    """Evaluate a frozen discriminator while retaining gradients to ``output``.
+
+    The discriminator stays in training mode. Freezing is the caller's
+    ``requires_grad`` toggle; switching to ``eval()`` here would also freeze
+    spectral-norm power iteration and disable the stochastic regularizers, which
+    belong to the discriminator's training semantics rather than to its
+    parameters.
+    """
+    prediction = discriminator(output)
+    return criterion(prediction, target_is_real=True, is_disc=False)

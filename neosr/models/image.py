@@ -520,9 +520,15 @@ class image(base):
                     )
 
             # wavelet guided loss
-            if self.wavelet_guided and current_iter >= self.wavelet_init:
-                with torch.no_grad():
-                    combined_HF, combined_HF_gt = wavelet_guided(self.output, self.gt)
+            wavelet_active = self.wavelet_guided and current_iter >= self.wavelet_init
+            if wavelet_active:
+                # Not wrapped in no_grad: the generator must reach the discriminator
+                # through the same transform the discriminator is trained on.
+                combined_HF, combined_HF_gt = wavelet_guided(self.output, self.gt)
+
+            # Both players see the same domain. The discriminator's fake sample is
+            # this tensor detached; the generator keeps its gradient path.
+            disc_input = combined_HF if wavelet_active else self.output  # type: ignore[reportPossiblyUnboundVariable]
 
             l_g_total = self.output.new_zeros(())
             loss_dict = OrderedDict()
@@ -536,7 +542,7 @@ class image(base):
                 if resolved.call_kind == "gan":
                     loss_val = generator_adversarial_loss(
                         self.net_d,  # type: ignore[arg-type]
-                        self.output,
+                        disc_input,
                         loss_module,  # type: ignore[arg-type]
                     )
                 elif resolved.call_kind == "match_target":
@@ -582,10 +588,12 @@ class image(base):
                 device_type="cuda", dtype=self.amp_dtype, enabled=self.use_amp
             ):
                 if self.cri_gan:
-                    # switch to eval mode
-                    self.net_d.eval()
+                    # The discriminator stays in training mode: it is frozen through
+                    # the requires_grad toggle above. eval() would additionally
+                    # freeze spectral-norm power iteration and disable the
+                    # stochastic regularizers, which are training semantics.
                     # real
-                    if self.wavelet_guided and current_iter >= self.wavelet_init:
+                    if wavelet_active:
                         real_d_pred = self.net_d(combined_HF_gt)  # type: ignore[reportPossiblyUnboundVariable]
                     else:
                         real_d_pred = self.net_d(self.gt)  # type: ignore[reportCallIssue]
@@ -598,10 +606,7 @@ class image(base):
                     scaled_d_real = l_d_real / self.accum_iters
 
                     # fake
-                    if self.wavelet_guided and current_iter >= self.wavelet_init:
-                        fake_d_pred = self.net_d(combined_HF.detach())  # type: ignore[reportPossiblyUnboundVariable]
-                    else:
-                        fake_d_pred = self.net_d(self.output.detach())  # type: ignore[reportCallIssue]
+                    fake_d_pred = self.net_d(disc_input.detach())  # type: ignore[reportCallIssue]
 
                     l_d_fake = self.cri_gan(
                         fake_d_pred, target_is_real=False, is_disc=True
@@ -612,9 +617,6 @@ class image(base):
 
                     # add total discriminator loss for tensorboard tracking
                     loss_dict["l_d_total"] = (l_d_real + l_d_fake) / 2
-
-                    # switch to train mode
-                    self.net_d.train()
 
                     # backward discriminator
                     if self.sam and current_iter >= self.sam_init:
