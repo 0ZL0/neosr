@@ -50,8 +50,10 @@ class base:
             self.sf_optim_g = None
             self.sf_optim_d = None
 
-    def feed_data(self, data: dict[str, str | Tensor]) -> None:
-        pass
+    def feed_data(
+        self, data: dict[str, str | Tensor], *, training: bool | None = None
+    ) -> None:
+        """Load one batch, defaulting its phase to the model's run mode."""
 
     def optimize_parameters(self, current_iter: int) -> bool:
         del current_iter

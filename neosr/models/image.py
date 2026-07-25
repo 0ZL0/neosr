@@ -44,10 +44,6 @@ class image(base):
 
         self.aug: tuple[str, ...] | None = None
         self.aug_prob: tuple[float, ...] | None = None
-        # Distinct from is_train, which says whether this is a training run at
-        # all. Overloading that one for the current phase silently disabled the
-        # schedule-free evaluation weights during validation.
-        self._validating = False
         if self.is_train:
             resolved_augment = resolve_augment_options(self.opt["datasets"]["train"])
             if resolved_augment is not None:
@@ -424,13 +420,18 @@ class image(base):
             self.optimizers.append(self.optimizer_d)
 
     @torch.no_grad()
-    def feed_data(self, data: dict[str, str | Tensor]) -> None:
+    def feed_data(
+        self, data: dict[str, str | Tensor], *, training: bool | None = None
+    ) -> None:
+        if training is None:
+            training = self.is_train
+
         self.lq = data["lq"].to(self.device, non_blocking=True)  # type: ignore[union-attr]
         if "gt" in data:
             self.gt = data["gt"].to(self.device, non_blocking=True)  # type: ignore[union-attr]
 
         # augmentation
-        if self.is_train and not self._validating and self.aug is not None:
+        if training and self.aug is not None:
             self.gt, self.lq = apply_augment(
                 self.gt, self.lq, augs=self.aug, prob=self.aug_prob
             )
@@ -824,8 +825,6 @@ class image(base):
     def nondist_validation(
         self, dataloader, current_iter: int, tb_logger, save_img: bool = True
     ) -> None:
-        # flag to not apply augmentation during val
-        self._validating = True
         dataset_name = dataloader.dataset.opt["name"]
         dataset_type = dataloader.dataset.opt["type"]
         # progress bar
@@ -853,7 +852,7 @@ class image(base):
         for val_data in dataloader:
             num_samples += 1
             img_name = Path(val_data["lq_path"][0]).stem
-            self.feed_data(val_data)
+            self.feed_data(val_data, training=False)
 
             model = (
                 self.net_g_ema
@@ -960,8 +959,6 @@ class image(base):
                 )
 
             self._log_validation_metric_values(current_iter, dataset_name, tb_logger)
-
-        self._validating = False
 
     def get_current_visuals(self) -> OrderedDict:
         out_dict = OrderedDict()

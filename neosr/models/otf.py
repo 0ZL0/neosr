@@ -89,9 +89,14 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
             self.queue_ptr += b
 
     @torch.no_grad()
-    def feed_data(self, data: dict[str, str | Tensor]) -> None:
-        """Accept data from dataloader, and then add two-order degradations to obtain LQ images."""
-        if self.is_train and not self._validating:
+    def feed_data(
+        self, data: dict[str, str | Tensor], *, training: bool | None = None
+    ) -> None:
+        """Load paired data or synthesize an LQ batch for a training call."""
+        if training is None:
+            training = self.is_train
+
+        if training:
             # training data synthesis
             self.gt = data["gt"].to(device=self.device, non_blocking=True)  # type: ignore[union-attr]
 
