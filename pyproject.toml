@@ -71,7 +71,6 @@ lint.ignore = [
     "DOC",
     "ERA001",
     "E501",
-    "E722",
     "E741",
     "FIX",
     "FBT001",

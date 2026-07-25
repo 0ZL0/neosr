@@ -13,35 +13,38 @@ from typing import Any
 
 import torch
 
-from neosr.utils.namespaces import LEGACY_TRAIN_LOSS_KEYS, LEGACY_TRAIN_LOSS_NAMES
 from neosr.utils import set_random_seed, tc
 from neosr.utils.dist_util import get_dist_info, init_dist, master_only
+from neosr.utils.namespaces import LEGACY_TRAIN_LOSS_KEYS, LEGACY_TRAIN_LOSS_NAMES
 
 _WARNED_CONFIG_MESSAGES: set[str] = set()
 
 
-def toml_load(f) -> dict[str, Any]:
+def toml_load(path) -> dict[str, Any]:
     """Load TOML file
     Args:
-        f (str): File path or a python string.
+        path (str): File path.
 
     Returns
     -------
         dict: Loaded dict.
 
     """
+    # Only a genuine syntax error gets the quoting hint. Letting OSError through
+    # keeps the real reason ("No such file or directory: ...") and the real path
+    # visible instead of reporting every failure as a decoding problem.
     try:
-        with Path(f).open("rb") as f:
-            return tomllib.load(f)
-    except:
+        with Path(path).open("rb") as handle:
+            return tomllib.load(handle)
+    except tomllib.TOMLDecodeError as error:
         msg = f"""
         {tc.red}
-        Error decoding TOML file.
+        Error decoding TOML file {path}:
+        {error}
         If you are on Windows, make sure your paths uses single-quotes.
         {tc.end}
         """
-        raise tomllib.TOMLDecodeError(msg)
-        sys.exit(1)
+        raise ValueError(msg) from error
 
 
 def _warn_config_once(message: str) -> None:

@@ -6,7 +6,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
+from neosr.archs.arch_util import DropPath, mod_pad, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -893,6 +893,7 @@ class swinir(nn.Module):
             self.mean = torch.zeros(1, 1, 1, 1)
         self.upscale = upscale
         self.upsampler = upsampler
+        self.window_size = window_size
 
         # ------------------------- 1, shallow feature extraction ------------------------- #
         self.conv_first = nn.Conv2d(num_in_ch, embed_dim, 3, 1, 1)
@@ -1038,6 +1039,9 @@ class swinir(nn.Module):
         return x
 
     def forward(self, x):
+        height, width = x.shape[-2:]
+        x = mod_pad(x, self.window_size)
+        padded_height = x.shape[-2]
         self.mean = self.mean.type_as(x)
         x = (x - self.mean) * self.img_range
 
@@ -1076,7 +1080,11 @@ class swinir(nn.Module):
 
         x = x / self.img_range + self.mean
 
-        return x
+        # Undo mod_pad at whatever factor the selected branch applied: the
+        # upsampler branches scale by self.upscale, but the denoising and
+        # JPEG-artifact branch reconstructs at the input resolution.
+        out_scale = x.shape[-2] // padded_height
+        return x[..., : height * out_scale, : width * out_scale]
 
     def flops(self):
         flops = 0

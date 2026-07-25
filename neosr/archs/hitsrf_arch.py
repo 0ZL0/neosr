@@ -2,12 +2,11 @@
 import math
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
+from neosr.archs.arch_util import DropPath, mod_pad, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -471,23 +470,14 @@ class HierarchicalTransformerBlock(nn.Module):
         # self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def check_image_size(self, x, win_size):
+        # This used to reflect-pad in two stages to work around reflect's
+        # "padding must be smaller than the input" limit. That only bought one
+        # doubling, so the hierarchical windows -- up to 8x the base size --
+        # still crashed on feature maps well within normal validation sizes.
+        # mod_pad falls back to replicate instead, which has no limit.
         x = x.permute(0, 3, 1, 2).contiguous()
-        _, _, h, w = x.size()
-        mod_pad_h = (win_size[0] - h % win_size[0]) % win_size[0]
-        mod_pad_w = (win_size[1] - w % win_size[1]) % win_size[1]
-
-        if mod_pad_h >= h or mod_pad_w >= w:
-            pad_h, pad_w = h - 1, w - 1
-            x = F.pad(x, (0, pad_w, 0, pad_h), "reflect")
-        else:
-            pad_h, pad_w = 0, 0
-
-        mod_pad_h = mod_pad_h - pad_h
-        mod_pad_w = mod_pad_w - pad_w
-
-        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
-        x = x.permute(0, 2, 3, 1).contiguous()
-        return x
+        x = mod_pad(x, (int(win_size[0]), int(win_size[1])))
+        return x.permute(0, 2, 3, 1).contiguous()
 
     def forward(self, x, x_size, win_size):
         H, W = x_size

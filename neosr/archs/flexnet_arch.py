@@ -6,7 +6,7 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DySample, net_opt
+from neosr.archs.arch_util import DySample, mod_pad, net_opt
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -685,18 +685,15 @@ class flexnet(nn.Module):
 
         self.apply(self._init_weights)
 
-    def check_img_size(self, x, resolution):
-        h, w = resolution
-        scaled_size = self.window_size.to(int)
+    def check_img_size(self, x):
+        scaled_size = int(self.window_size)
         if self.pipeline_type == "meta":
             scaled_size *= 8
-        mod_pad_h = (scaled_size - h % scaled_size) % scaled_size
-        mod_pad_w = (scaled_size - w % scaled_size) % scaled_size
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+        return mod_pad(x, scaled_size)
 
     def forward(self, x):
         _, _, h, w = x.size()
-        x = self.check_img_size(x, (h, w))
+        x = self.check_img_size(x)
         short_cut = self.short_cut(x)
         x = self.in_to_feat(x)
         x = self.pipeline(x)

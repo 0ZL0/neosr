@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt, to_2tuple
+from neosr.archs.arch_util import mod_pad, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -346,13 +346,8 @@ class lmlt(nn.Module):
         )
 
     def check_img_size(self, x):
-        _, _, h, w = x.size()
         downsample_scale = 8
-        scaled_size = self.window_size * downsample_scale
-
-        mod_pad_h = (scaled_size - h % scaled_size) % scaled_size
-        mod_pad_w = (scaled_size - w % scaled_size) % scaled_size
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+        return mod_pad(x, int(self.window_size) * downsample_scale)
 
     def forward(self, x):
         _B, _C, H, W = x.shape

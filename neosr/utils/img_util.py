@@ -196,19 +196,25 @@ def imwrite(
         auto_mkdir (bool): If the parent folder of `file_path` does not exist,
             whether to create it automatically.
 
-    Returns:
-    -------
-        bool: Successful or not.
-
     """
     if auto_mkdir:
         dir_name = Path(Path(file_path).parent).resolve()
         Path(dir_name).mkdir(parents=True, exist_ok=True)
     try:
-        cv2.imencode(Path(file_path).suffix, img, params or [])[1].tofile(file_path)
-    except:
-        msg = "Failed to write images."
+        success, buffer = cv2.imencode(Path(file_path).suffix, img, params or [])
+    except cv2.error as error:
+        msg = f"Failed to encode image for {file_path}: {error}"
+        raise OSError(msg) from error
+    if not success:
+        # imencode reports an unsupported extension this way rather than raising;
+        # writing the empty buffer would leave a silently corrupt file behind.
+        msg = f"Failed to encode image for {file_path}: unsupported image format."
         raise OSError(msg)
+    try:
+        buffer.tofile(file_path)
+    except OSError as error:
+        msg = f"Failed to write image to {file_path}: {error}"
+        raise OSError(msg) from error
 
 
 def crop_border(imgs: np.ndarray | list[np.ndarray], crop_border: int) -> ArrayLike:

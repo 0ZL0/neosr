@@ -213,18 +213,28 @@ def train_pipeline(root_path: str) -> None:
         msg = f"{tc.red}CUDA not available. Please install pytorch with cuda support.{tc.end}"
         raise NotImplementedError(msg)
 
-    # check if system cuda version is not lower than pytorch target
-    try:
-        nvcc_cmd = "nvcc --version"
-        nvcc_cuda = re.search(r"release (\d+\.\d+)", popen(nvcc_cmd).read())[1]  # noqa: S605
-        torch_cuda = torch.version.cuda
-        if tuple(map(int, torch_cuda.split("."))) > tuple(
-            map(int, nvcc_cuda.split("."))
-        ):
-            msg = f"{tc.red}Your system CUDA version appears to be {nvcc_cuda} while pytorch is higher ({torch_cuda})!{tc.end}"
-            raise RuntimeError(msg)
-    except:
-        pass
+    # check if system cuda version is not lower than pytorch target.
+    # A missing nvcc is normal on runtime-only CUDA installs, so this stays a
+    # diagnostic: it must never keep training from starting. The logger is not
+    # configured yet, hence print().
+    torch_cuda = torch.version.cuda
+    nvcc_release = re.search(
+        r"release (\d+\.\d+)",
+        popen("nvcc --version").read(),  # noqa: S605, S607
+    )
+    if torch_cuda is not None and nvcc_release is not None:
+        nvcc_cuda = nvcc_release[1]
+        try:
+            outdated = tuple(map(int, torch_cuda.split("."))) > tuple(
+                map(int, nvcc_cuda.split("."))
+            )
+        except ValueError:
+            outdated = False
+        if outdated:
+            print(
+                f"{tc.light_yellow}Your system CUDA version appears to be "
+                f"{nvcc_cuda} while pytorch is higher ({torch_cuda})!{tc.end}"
+            )
 
     # default device
     torch.set_default_device("cuda")
@@ -274,9 +284,13 @@ def train_pipeline(root_path: str) -> None:
     # copy the toml file to the experiment root
     try:
         copy_opt_file(args.opt, opt["path"]["experiments_root"])
-    except:
-        msg = f"{tc.red}Failed. Make sure the option 'name' in your config file is the same as the previous state!{tc.end}"
-        raise ValueError(msg)
+    except OSError as error:
+        msg = (
+            f"{tc.red}Could not copy the config into "
+            f"{opt['path']['experiments_root']}: {error}\n"
+            f"When resuming, the option 'name' must match the previous state!{tc.end}"
+        )
+        raise ValueError(msg) from error
 
     # WARNING: should not use get_root_logger in the above codes, including the called functions
     # Otherwise the logger will not be properly initialized

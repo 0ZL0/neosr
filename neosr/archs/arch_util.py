@@ -15,6 +15,41 @@ def net_opt() -> tuple[int, bool]:
     return 4, True
 
 
+def mod_pad(x: Tensor, multiple: int | tuple[int, int]) -> Tensor:
+    """Pad an NCHW tensor's bottom and right edges up to a multiple of ``multiple``.
+
+    Window-based architectures can only partition feature maps whose height and
+    width are exact multiples of their window size, so their forward pass has to
+    pad first and crop the result back to the original extent afterwards. Padding
+    on the bottom/right only keeps the surviving region aligned with the input,
+    which is what makes that final crop valid.
+
+    Reflect padding continues the edge gradient and is what the reference SwinIR
+    implementations use, but it cannot pad by more than the source extent. Inputs
+    smaller than one window therefore fall back to replicate, which has no such
+    limit and still avoids the black border that constant padding would bleed
+    into the output.
+
+    Args:
+    ----
+        x (Tensor): Input tensor in NCHW layout.
+        multiple (int | tuple[int, int]): Required alignment, either shared by
+            both axes or given as ``(height, width)``.
+
+    """
+    mult_h, mult_w = (multiple, multiple) if isinstance(multiple, int) else multiple
+    if mult_h < 1 or mult_w < 1:
+        msg = f"mod_pad multiple must be positive, got {multiple}."
+        raise ValueError(msg)
+    height, width = x.shape[-2:]
+    pad_h = -height % mult_h
+    pad_w = -width % mult_w
+    if pad_h == 0 and pad_w == 0:
+        return x
+    mode = "reflect" if pad_h < height and pad_w < width else "replicate"
+    return F.pad(x, (0, pad_w, 0, pad_h), mode)
+
+
 class DySample(nn.Module):
     """Adapted from 'Learning to Upsample by Learning to Sample':
     https://arxiv.org/abs/2308.15085
@@ -40,11 +75,15 @@ class DySample(nn.Module):
     ) -> None:
         super().__init__()
 
-        try:
-            assert in_channels >= groups
-            assert in_channels % groups == 0
-        except:
-            msg = "Incorrect in_channels and groups values."
+        # Ordered so the modulo below can never divide by zero.
+        if groups < 1:
+            msg = f"DySample groups must be a positive integer, got {groups}."
+            raise ValueError(msg)
+        if in_channels < groups or in_channels % groups != 0:
+            msg = (
+                f"DySample in_channels ({in_channels}) must be a positive multiple "
+                f"of groups ({groups})."
+            )
             raise ValueError(msg)
 
         out_channels = 2 * groups * scale**2

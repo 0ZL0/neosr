@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
+from neosr.archs.arch_util import DropPath, mod_pad, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -754,6 +754,9 @@ class microsr(nn.Module):
         return self.patch_unembed(x, x_size)
 
     def forward(self, x):
+        height, width = x.shape[-2:]
+        x = mod_pad(x, self.window_size)
+        padded_height = x.shape[-2]
         if self.rgb_norm:
             self.mean = self.mean.type_as(x)
             x = (x - self.mean) * self.img_range
@@ -764,7 +767,10 @@ class microsr(nn.Module):
             x = self.conv_last(self.upsample(x))
         if self.rgb_norm:
             x = x / self.img_range + self.mean
-        return x
+        # Undo mod_pad at whatever factor the selected branch applied; a
+        # non-upsampling branch leaves the resolution unchanged.
+        out_scale = x.shape[-2] // padded_height
+        return x[..., : height * out_scale, : width * out_scale]
 
 
 @ARCH_REGISTRY.register()

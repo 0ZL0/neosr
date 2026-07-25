@@ -87,17 +87,12 @@ def load_net():
     )
     # find parameter key
     print("-------- Finding parameter key...")
-    param_key: str | None = None
-    try:
-        if "params-ema" in load_net:
-            param_key = "params-ema"
-        elif "params" in load_net:
-            param_key = "params"
-        elif "params_ema" in load_net:
-            param_key = "params_ema"
-        load_net = load_net[param_key]
-    except:
-        pass
+    # A checkpoint without any of these wrapper keys is already a bare state
+    # dict and is used as-is.
+    for param_key in ("params-ema", "params", "params_ema"):
+        if param_key in load_net:
+            load_net = load_net[param_key]
+            break
 
     # remove unnecessary 'module.'
     for k, v in deepcopy(load_net).items():
@@ -118,13 +113,12 @@ def load_net():
 
     # plainusr
     if args.network == "plainusr":
-        try:
-            for module in net.modules():
-                if hasattr(module, "switch_to_deploy"):
-                    module.switch_to_deploy(args.prune)
-            print("-------- Reparametrization completed successfully.")
-        except:
-            pass
+        # Not guarded: a failure here would export a model that silently skipped
+        # reparametrization, which is worse than refusing to export.
+        for module in net.modules():
+            if hasattr(module, "switch_to_deploy"):
+                module.switch_to_deploy(args.prune)
+        print("-------- Reparametrization completed successfully.")
 
     net = net.to(device="cuda", non_blocking=True)  # type: ignore[reportAttributeAccessIssue,attr-defined]
     print(f"-------- Successfully loaded network [{args.network}].")

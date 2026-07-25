@@ -111,7 +111,7 @@ def build_dataloader(
             "shuffle": False,
             "num_workers": num_workers,
             "sampler": sampler,
-            "prefetch_factor": 8,
+            "prefetch_factor": dataset_opt.get("prefetch_factor", 8),
             "drop_last": True,
         }
         if sampler is None:
@@ -144,5 +144,18 @@ def build_dataloader(
     dataloader_args["persistent_workers"] = dataset_opt.get(
         "persistent_workers", dataloader_args["num_workers"] > 0
     )
+
+    if dataloader_args["num_workers"] == 0:
+        # Both options only describe worker processes, and DataLoader rejects
+        # them outright when there are none. Dropping them here keeps
+        # single-process loading -- the usual way to debug a dataset or a
+        # degradation pipeline -- working with the defaults above.
+        dataloader_args.pop("prefetch_factor", None)
+        if dataset_opt.get("persistent_workers"):
+            get_root_logger().warning(
+                "'persistent_workers' requires worker processes; ignoring it "
+                "because num_worker_per_gpu is 0."
+            )
+        dataloader_args["persistent_workers"] = False
 
     return data.DataLoader(**dataloader_args)

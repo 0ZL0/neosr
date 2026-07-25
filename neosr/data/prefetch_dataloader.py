@@ -106,8 +106,17 @@ class CUDAPrefetcher:
                     )
 
     def next(self):
-        torch.cuda.current_stream().wait_stream(self.stream)
+        current_stream = torch.cuda.current_stream()
+        current_stream.wait_stream(self.stream)
         batch = self.batch
+        if batch is not None:
+            for value in batch.values():
+                if torch.is_tensor(value) and value.is_cuda:
+                    # The copies were issued on self.stream, so the allocator
+                    # considers these blocks free as soon as that stream drains.
+                    # Without this the next preload could hand the same memory
+                    # out again while the compute stream is still reading it.
+                    value.record_stream(current_stream)
         self.preload()
         return batch
 

@@ -72,11 +72,14 @@ def pixel_unshuffle(x, scale):
     """
     b, c, hh, hw = x.size()
     out_channel = c * (scale**2)
-    try:
-        assert hh % scale == 0 and hw % scale == 0
-    except:
-        msg = "Image resolution must be divisible by the update ratio. Enable tile in config."
-        raise NotImplementedError(msg)
+    if hh % scale != 0 or hw % scale != 0:
+        # Was an assert, which -O strips out; the reshape below would then
+        # fail with an unrelated message.
+        msg = (
+            f"Image resolution ({hh}x{hw}) must be divisible by the pixel-unshuffle "
+            f"ratio ({scale}). Enable tile in config."
+        )
+        raise ValueError(msg)
     h = hh // scale
     w = hw // scale
     x_view = x.view(b, c, h, scale, w, scale)

@@ -17,6 +17,11 @@ except ModuleNotFoundError:
 
 _PYIQA_METRICS_CACHE: dict[tuple[str, bool, str, tuple[tuple[str, str], ...]], Any] = {}
 
+# Full-reference metrics that accept ``crop_border``. The single-image
+# super-resolution literature reports these on the Y channel after shaving
+# ``scale`` pixels off every border, which ``calculate_metric`` applies.
+SHAVED_METRICS = frozenset({"calculate_psnr", "calculate_ssim"})
+
 
 def _get_pyiqa_metric(
     metric_name: str,
@@ -79,13 +84,54 @@ def _to_pyiqa_tensor(
     return torch.clamp(tensor, 0.0, 1.0)
 
 
+def _prepare_pair(
+    img: np.ndarray,
+    img2: np.ndarray,
+    crop_border: int,
+    input_order: str,
+    test_y_channel: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply the preprocessing PSNR and SSIM share, in benchmark order.
+
+    The single-image super-resolution literature shaves the border on the colour
+    image first and only then extracts luminance, so the two steps are not
+    interchangeable and both metrics must apply them identically.
+    """
+    if img.shape != img2.shape:
+        msg = f"Image shapes are different: {img.shape}, {img2.shape}."
+        raise ValueError(msg)
+    if input_order not in {"HWC", "CHW"}:
+        msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
+        raise ValueError(msg)
+    img = reorder_image(img, input_order=input_order)
+    img2 = reorder_image(img2, input_order=input_order)
+
+    if crop_border != 0:
+        if min(img.shape[0], img.shape[1]) <= 2 * crop_border:
+            # Slicing further would yield an empty array and a silent NaN score,
+            # which then propagates into the tracked best-metric result.
+            msg = (
+                f"crop_border {crop_border} leaves nothing of a "
+                f"{img.shape[0]}x{img.shape[1]} image."
+            )
+            raise ValueError(msg)
+        img = img[crop_border:-crop_border, crop_border:-crop_border, ...]
+        img2 = img2[crop_border:-crop_border, crop_border:-crop_border, ...]
+
+    if test_y_channel:
+        img = to_y_channel(img)
+        img2 = to_y_channel(img2)
+
+    return img.astype(np.float64), img2.astype(np.float64)
+
+
 @METRIC_REGISTRY.register()
 def calculate_psnr(
     img: np.ndarray,
     img2: np.ndarray,
-    crop_border: int = 4,
+    crop_border: int = 0,
     input_order: str = "HWC",
-    test_y_channel: bool = False,
+    test_y_channel: bool = True,
     **kwargs,  # noqa: ARG001
 ) -> float:
     """Calculate PSNR (Peak Signal-to-Noise Ratio).
@@ -96,34 +142,21 @@ def calculate_psnr(
     ----
         img (ndarray): Images with range [0, 255].
         img2 (ndarray): Images with range [0, 255].
-        crop_border (int): Cropped pixels in each edge of an image. These pixels are not involved in the calculation.
+        crop_border (int): Cropped pixels in each edge of an image. These pixels are not
+            involved in the calculation. ``calculate_metric`` defaults this to the
+            configured scale, which is the SISR benchmark convention. Default: 0.
         input_order (str): Whether the input order is 'HWC' or 'CHW'. Default: 'HWC'.
-        test_y_channel (bool): Test on Y channel of YCbCr. Default: False.
+        test_y_channel (bool): Test on Y channel of YCbCr, as SISR benchmarks report.
+            Default: True.
 
     Returns:
     -------
         float: PSNR result.
 
     """
-    assert img.shape == img2.shape, (
-        f"Image shapes are different: {img.shape}, {img2.shape}."
+    img, img2 = _prepare_pair(
+        img, img2, crop_border, input_order, test_y_channel=test_y_channel
     )
-    if input_order not in {"HWC", "CHW"}:
-        msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
-        raise ValueError(msg)
-    img = reorder_image(img, input_order=input_order)
-    img2 = reorder_image(img2, input_order=input_order)
-
-    if crop_border != 0:
-        img = img[crop_border:-crop_border, crop_border:-crop_border, ...]
-        img2 = img2[crop_border:-crop_border, crop_border:-crop_border, ...]
-
-    if test_y_channel:
-        img = to_y_channel(img)
-        img2 = to_y_channel(img2)
-
-    img = img.astype(np.float64)
-    img2 = img2.astype(np.float64)
 
     mse = np.mean((img - img2) ** 2)
     if mse <= 0:
@@ -131,7 +164,6 @@ def calculate_psnr(
     return 10.0 * np.log10(255.0 * 255.0 / mse)
 
 
-@staticmethod
 def _ssim(img: np.ndarray | MatLike, img2: np.ndarray | MatLike) -> float:
     """Calculate SSIM (structural similarity) for one channel images.
 
@@ -174,9 +206,9 @@ def _ssim(img: np.ndarray | MatLike, img2: np.ndarray | MatLike) -> float:
 def calculate_ssim(
     img: np.ndarray,
     img2: np.ndarray,
-    crop_border: int = 4,
+    crop_border: int = 0,
     input_order: str = "HWC",
-    test_y_channel: bool = False,
+    test_y_channel: bool = True,
     **kwargs,  # noqa: ARG001
 ) -> float:
     """Calculate SSIM (structural similarity).
@@ -193,45 +225,28 @@ def calculate_ssim(
     ----
         img (ndarray): Images with range [0, 255].
         img2 (ndarray): Images with range [0, 255].
-        crop_border (int): Cropped pixels in each edge of an image. These pixels are not involved in the calculation.
+        crop_border (int): Cropped pixels in each edge of an image. These pixels are not
+            involved in the calculation. ``calculate_metric`` defaults this to the
+            configured scale, which is the SISR benchmark convention. Default: 0.
         input_order (str): Whether the input order is 'HWC' or 'CHW'.
             Default: 'HWC'.
-        test_y_channel (bool): Test on Y channel of YCbCr. Default: False.
+        test_y_channel (bool): Test on Y channel of YCbCr, as SISR benchmarks report.
+            Default: True.
 
     Returns:
     -------
         float: SSIM result.
 
     """
-    assert img.shape == img2.shape, (
-        f"Image shapes are different: {img.shape}, {img2.shape}."
+    img, img2 = _prepare_pair(
+        img, img2, crop_border, input_order, test_y_channel=test_y_channel
     )
-    if input_order not in {"HWC", "CHW"}:
-        msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
-        raise ValueError(msg)
-    img = reorder_image(img, input_order=input_order)
-    img2 = reorder_image(img2, input_order=input_order)
 
-    if crop_border != 0:
-        img = img[crop_border:-crop_border, crop_border:-crop_border, ...]
-        img2 = img2[crop_border:-crop_border, crop_border:-crop_border, ...]
-
-    if test_y_channel:
-        img = to_y_channel(img)
-        img2 = to_y_channel(img2)
-
-    img = img.astype(np.float64)
-    img2 = img2.astype(np.float64)
-
-    ssims = []
-    ssims.extend([_ssim(img[..., i], img2[..., i]) for i in range(img.shape[2])])
-    ssim_result = np.array(ssims).mean()
-    if ssim_result <= 0:
-        return float("inf")
-    return ssim_result
-
-
-
+    ssims = [_ssim(img[..., i], img2[..., i]) for i in range(img.shape[2])]
+    # SSIM is defined on [-1, 1]: zero means no structural similarity and
+    # negative means anti-correlation. Both are legitimate low scores, so they
+    # are returned as-is rather than mapped to a best-possible value.
+    return float(np.array(ssims).mean())
 
 
 @METRIC_REGISTRY.register()

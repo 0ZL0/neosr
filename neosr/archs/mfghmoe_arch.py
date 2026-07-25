@@ -5,7 +5,7 @@ from einops import rearrange
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
+from neosr.archs.arch_util import DropPath, mod_pad, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -1337,6 +1337,9 @@ class mfghmoe(nn.Module):
         return x, x_t
 
     def forward(self, x):
+        height, width = x.shape[-2:]
+        x = mod_pad(x, self.window_size)
+        padded_height = x.shape[-2]
         if self.upsampler == "pixelshuffle":
             # for classical SR
             x = self.conv_first(x)
@@ -1345,4 +1348,7 @@ class mfghmoe(nn.Module):
             x = self.conv_before_upsample(x)
             x = self.conv_last(self.upsample(x, x_t))
 
-        return x
+        # Undo mod_pad at whatever factor the selected branch applied; a
+        # non-upsampling branch leaves the resolution unchanged.
+        out_scale = x.shape[-2] // padded_height
+        return x[..., : height * out_scale, : width * out_scale]

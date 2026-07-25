@@ -44,7 +44,7 @@ Configuration templates are available in [options](options/).
 |---------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)                                             | `esrgan`                               			|
 | [SRVGGNetCompact](https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/archs/srvgg_arch.py) | `compact`                              			|
-| [SwinIR](https://github.com/JingyunLiang/SwinIR)                                                  | `swinir_small`, `swinir_medium`        			|
+| [SwinIR](https://github.com/JingyunLiang/SwinIR)                                                  | `swinir_small`, `swinir_medium`, `swinir_large`		|
 | [Swin2SR](https://github.com/mv-lab/swin2sr)                                                      | `swin2sr`                              			|
 | [EDSR](https://github.com/sanghyun-son/EDSR-PyTorch)                                             | `edsr`                                 			|
 | [RLFN](https://github.com/bytedance/RLFN)                                                        | `rlfn`, `rlfn_s`, `rlfn_prune`, `rlfn_ntire`             |
@@ -55,7 +55,7 @@ Configuration templates are available in [options](options/).
 | [PFT-SR](https://github.com/LabShuHangGU/PFT-SR)                                                  | `pftsr`, `pftsr_light`, `pftsr_cuda`, `pftsr_light_cuda` |
 | [OmniSR](https://github.com/Francis0625/Omni-SR)                                                  | `omnisr`                               			|
 | [SRFormer](https://github.com/HVision-NKU/SRFormer)                                               | `srformer_light`, `srformer_medium`    			|
-| [DAT](https://github.com/zhengchen1999/dat)                                                       | `dat_small`, `dat_medium`, `dat_2` 			|
+| [DAT](https://github.com/zhengchen1999/dat)                                                       | `dat_s`, `dat_m`, `dat_2` 					|
 | [DITN](https://github.com/yongliuy/DITN)							    | `ditn`				     	      		|
 | [DCTLSA](https://github.com/zengkun301/DCTLSA)						    | `dctlsa`							|
 | [SPAN](https://github.com/hongyuanyu/SPAN)							    | `span`, `span_fast`					|
@@ -66,7 +66,7 @@ Configuration templates are available in [options](options/).
 | [ATD](https://github.com/LabShuHangGU/Adaptive-Token-Dictionary)   				    | `atd`, `atd_light`   					|
 | [PLKSR](https://github.com/dslisleedh/PLKSR)			     				    | `plksr`, `plksr_tiny`	    				|
 | [RealPLKSR](https://github.com/dslisleedh/PLKSR/issues/4)					    | `realplksr`, `realplksr_s`, `realplksr_l`			|
-| [DRCT](https://github.com/ming053l/DRCT)			     				    | `drct`, `drct_l`, `drct_s`   				|
+| [DRCT](https://github.com/ming053l/DRCT)			     				    | `drct`, `drct_s`, `drct_l`, `drct_xl`   			|
 | [MSDAN](https://github.com/Supereeeee/MSDAN)			     				    | `msdan`			    				|
 | [SPANPlus](https://github.com/umzi2/SPANPlus)							    | `spanplus`, `spanplus_sts`, `spanplus_s`, `spanplus_st`   |
 | [HiT-SRF](https://github.com/XiangZ-0/HiT-SR)							    | `hit_srf`, `hit_srf_medium`, `hit_srf_large`		|
@@ -89,10 +89,10 @@ Configuration templates are available in [options](options/).
 | [MoESR](https://github.com/umzi2/MoESR)					| `moesr`					   |
 | [ASID](https://github.com/saturnian77/ASID)					| `asid`, `asid_d8`				   |
 | [MoSRV2](https://github.com/umzi2/MoSRV2)					| `mosrv2`					   |
-| [ESC](https://github.com/dslisleedh/ESC)					| `esc`, `esc_fp`, `esc_large`			   |
+| [ESC](https://github.com/dslisleedh/ESC)					| `esc`, `esc_light`, `esc_fp`, `esc_large`	   |
 | [CATANet](https://github.com/EquationWalker/CATANet)				| `catanet`					   |
 | [MFG-HMoE](https://github.com/Mr-Bamboo/MFG-HMoE)				| `mfghmoe`					   |
-| [MicroSR](https://github.com/YanHuiGUO/Submission-for-NTIRE-2025-SR-x4-)	| `microsr`					   |
+| [MicroSR](https://github.com/YanHuiGUO/Submission-for-NTIRE-2025-SR-x4-)	| `microsr`, `microsr_light`			   |
 
 ## License
 

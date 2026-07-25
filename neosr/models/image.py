@@ -42,6 +42,9 @@ class image(base):
     def __init__(self, opt: dict[str, Any]) -> None:
         super().__init__(opt)
 
+        # scale ratio var; validation metrics need it outside training too
+        self.scale = opt["scale"]
+
         self.aug: tuple[str, ...] | None = None
         self.aug_prob: tuple[float, ...] | None = None
         if self.is_train:
@@ -129,9 +132,6 @@ class image(base):
             self.net_d.train()  # type: ignore[reportArgumentType]
             if self.sf_optim_d:
                 self.optimizer_d.train()  # type: ignore[attr-defined]
-
-        # scale ratio var
-        self.scale = self.opt["scale"]
 
         # patch size var
         self.patch_size = self.opt["datasets"]["train"].get("patch_size")
@@ -932,7 +932,7 @@ class image(base):
                     with torch.no_grad():
                         try:
                             self.metric_results[name] += calculate_metric(  # type: ignore[reportOperatorIssue]
-                                metric_data, opt_
+                                metric_data, opt_, scale=self.scale
                             )
                         except Exception as exc:
                             if dataset_type == "single":

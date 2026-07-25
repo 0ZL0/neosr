@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import net_opt, to_2tuple
+from neosr.archs.arch_util import mod_pad, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -1364,6 +1364,9 @@ class hma(nn.Module):
         return x
 
     def forward(self, x):
+        height, width = x.shape[-2:]
+        x = mod_pad(x, self.window_size)
+        padded_height = x.shape[-2]
         self.mean = self.mean.type_as(x)
         x = (x - self.mean) * self.img_range
 
@@ -1376,7 +1379,10 @@ class hma(nn.Module):
 
         x = x / self.img_range + self.mean
 
-        return x
+        # Undo mod_pad at whatever factor the selected branch applied; a
+        # non-upsampling branch leaves the resolution unchanged.
+        out_scale = x.shape[-2] // padded_height
+        return x[..., : height * out_scale, : width * out_scale]
 
 
 @ARCH_REGISTRY.register()
