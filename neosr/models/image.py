@@ -13,7 +13,7 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from tqdm import tqdm
 
 from neosr.archs import build_network
-from neosr.data.augmentations import apply_augment
+from neosr.data.augmentations import apply_augment, resolve_augment_options
 from neosr.losses import build_loss
 from neosr.losses.wavelet_guided import wavelet_guided
 from neosr.metrics import calculate_metric
@@ -27,11 +27,12 @@ from neosr.models.training_utils import (
 )
 from neosr.optimizers import adamw_sf, adan, adan_sf, fsam, soap_sf
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
-from neosr.utils.namespaces import ResolvedLossType
 from neosr.utils.registry import MODEL_REGISTRY
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import Optimizer
+
+    from neosr.utils.namespaces import ResolvedLossType
 
 
 @MODEL_REGISTRY.register()
@@ -40,6 +41,13 @@ class image(base):
 
     def __init__(self, opt: dict[str, Any]) -> None:
         super().__init__(opt)
+
+        self.aug: tuple[str, ...] | None = None
+        self.aug_prob: tuple[float, ...] | None = None
+        if self.is_train:
+            resolved_augment = resolve_augment_options(self.opt["datasets"]["train"])
+            if resolved_augment is not None:
+                self.aug, self.aug_prob = resolved_augment
 
         # define network net_g
         self.net_g = build_network(opt["network_g"], scale=opt["scale"])
@@ -127,10 +135,6 @@ class image(base):
 
         # patch size var
         self.patch_size = self.opt["datasets"]["train"].get("patch_size")
-
-        # augmentations
-        self.aug = self.opt["datasets"]["train"].get("augmentation", None)
-        self.aug_prob = self.opt["datasets"]["train"].get("aug_prob", None)
 
         # validation tile option
         self.tile = (
@@ -261,8 +265,6 @@ class image(base):
             msg = f"{tc.red}GAN requires a discriminator to be set.{tc.end}"
             logger.error(msg)
             sys.exit(1)
-        if self.aug is not None and self.patch_size % 4 != 0:
-            msg = f"{tc.red}The patch_size value must be a multiple of 4. Please change it.{tc.end}"
         if self.wavelet_guided and self.cri_gan is None:
             msg = f"{tc.red}Wavelet-Guided requires GAN.{tc.end}"
             logger.error(msg)
@@ -316,7 +318,9 @@ class image(base):
             loss_module = loss_module.to(  # type: ignore[union-attr]
                 self.device, memory_format=torch.channels_last, non_blocking=True
             )
-            logger.info(f"Configured loss '{loss_name}' as [{resolved.canonical_type}].")
+            logger.info(
+                f"Configured loss '{loss_name}' as [{resolved.canonical_type}]."
+            )
             entries.append({
                 "name": loss_name,
                 "module": loss_module,
@@ -423,16 +427,9 @@ class image(base):
 
         # augmentation
         if self.is_train and self.aug is not None:
-            if len(self.aug) == 1 and "none" in self.aug:
-                pass
-            else:
-                self.gt, self.lq = apply_augment(
-                    self.gt,
-                    self.lq,
-                    scale=self.scale,
-                    augs=self.aug,
-                    prob=self.aug_prob,
-                )
+            self.gt, self.lq = apply_augment(
+                self.gt, self.lq, augs=self.aug, prob=self.aug_prob
+            )
 
     def eco_strategy(self, current_iter: int):
         """Adapted version of "Empirical Centroid-oriented Optimization":

@@ -12,6 +12,7 @@ import torch
 from torch.utils import data
 
 from neosr.data import build_dataloader, build_dataset
+from neosr.data.augmentations import resolve_augment_options
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.models import build_model
@@ -230,6 +231,8 @@ def train_pipeline(root_path: str) -> None:
 
     # parse options, set distributed setting, set random seed
     opt, args = parse_options(root_path, is_train=True)
+    # validate here so a bad policy fails before the dataset scan
+    resolve_augment_options(opt["datasets"]["train"])
     opt["root_path"] = root_path
     opt["datasets"]["train"]["accumulate"] = normalize_accumulation_steps(
         opt["datasets"]["train"].get("accumulate", 1)
