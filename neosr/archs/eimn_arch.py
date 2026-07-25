@@ -311,9 +311,9 @@ class eimn(nn.Module):
 
 @ARCH_REGISTRY.register()
 def eimn_l(scale: int = 2) -> eimn:
-    return eimn(embed_dims=64, num_stages=16)
+    return eimn(embed_dims=64, scale=scale, num_stages=16)
 
 
 @ARCH_REGISTRY.register()
 def eimn_a(scale: int = 2) -> eimn:
-    return eimn(embed_dims=64, num_stages=14)
+    return eimn(embed_dims=64, scale=scale, num_stages=14)
