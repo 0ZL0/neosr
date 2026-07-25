@@ -1,8 +1,10 @@
 import gc
+import os
 import sys
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -18,7 +20,7 @@ from neosr.utils.dist_util import get_dist_info, master_only
 from neosr.utils.rng import capture_rng_state, restore_rng_state
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 
 class base:
@@ -318,6 +320,62 @@ class base:
         logger.info(f"Network: {net_cls_str}, with parameters: {net_params:,d}")
         logger.info(net_str)
 
+    @contextmanager
+    def evaluation_weights(self) -> "Iterator[None]":
+        """Hold schedule-free optimizers at the iterate that has to be read.
+
+        Schedule-free methods step on the interpolated ``y`` iterate but must be
+        evaluated and serialized at ``x``. ``sf_optim_*`` is None outside
+        training, so no additional flag is needed here -- and in particular no
+        flag that validation mutates may be consulted.
+        """
+        optimizers = []
+        if self.sf_optim_g:
+            optimizers.append(self.optimizer_g)
+        if self.net_d is not None and self.sf_optim_d:
+            optimizers.append(self.optimizer_d)
+
+        for optimizer in optimizers:
+            optimizer.eval()  # type: ignore[attr-defined]
+        try:
+            yield
+        finally:
+            for optimizer in optimizers:
+                optimizer.train()  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _save_with_retry(obj: Any, path: Path, what: str, attempts: int = 3) -> None:
+        """Serialize ``obj`` to ``path`` atomically, retrying transient OS errors.
+
+        The payload goes to a sibling temporary file that is renamed into place,
+        so an interrupted or failing write cannot leave a half-written
+        checkpoint behind -- auto-resume always picks the highest iteration it
+        finds and would otherwise choke on it.
+        """
+        logger = get_root_logger()
+        tmp = path.with_name(f"{path.name}.tmp")
+        for attempt in range(1, attempts + 1):
+            try:
+                with tmp.open("wb") as f:
+                    torch.save(obj, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                tmp.replace(path)
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                logger.warning(
+                    f"{tc.red}Save {what} error. "
+                    f"Remaining retry times: {attempts - attempt}{tc.end}"
+                )
+                if attempt < attempts:
+                    time.sleep(1)
+            else:
+                return
+
+        msg = f"{tc.red}Cannot save {path}, aborting.{tc.end}"
+        logger.error(msg)
+        sys.exit(1)
+
     @master_only
     def save_network(
         self,
@@ -348,49 +406,22 @@ class base:
             "The lengths of net and param_key should be the same."
         )
 
+        # The copy has to happen inside the context: it is what gets written, so
+        # bracketing only the write would export the training iterate instead.
         save_dict = {}
-        for net_, param_key_ in zip(net, param_key, strict=True):
-            net__ = self.get_bare_model(net_)
-            state_dict = net__.state_dict()
-            new_state_dict = OrderedDict()
+        with self.evaluation_weights():
+            for net_, param_key_ in zip(net, param_key, strict=True):
+                net__ = self.get_bare_model(net_)
+                new_state_dict = OrderedDict()
 
-            for key, param in state_dict.items():
-                key = key.removeprefix("module.")  # noqa: PLW2901
-                if key.startswith("n_averaged"):  # skip n_averaged from EMA
-                    continue
-                new_state_dict[key] = param.cpu()
-            save_dict[param_key_] = new_state_dict
+                for key, param in net__.state_dict().items():
+                    key = key.removeprefix("module.")  # noqa: PLW2901
+                    if key.startswith("n_averaged"):  # skip n_averaged from EMA
+                        continue
+                    new_state_dict[key] = param.cpu()
+                save_dict[param_key_] = new_state_dict
 
-        if self.sf_optim_g and self.is_train:
-            self.optimizer_g.eval()  # type: ignore[attr-defined]
-        if self.net_d is not None and self.sf_optim_d and self.is_train:
-            self.optimizer_d.eval()  # type: ignore[attr-defined]
-
-        # avoid occasional writing errors
-        retry = 3
-        logger = get_root_logger()
-        while retry > 0:
-            try:
-                torch.save(save_dict, save_path)
-            except OSError:
-                logger.warning(
-                    f"{tc.red}Save model error. Remaining retry times: {retry - 1}{tc.end}"
-                )
-                time.sleep(1)
-            else:
-                break
-            finally:
-                retry -= 1
-        if retry == 0:
-            logger.warning(f"Still cannot save {save_path}.")
-            msg = f"{tc.red}Cannot save {save_path}.{tc.end}"
-            logger.error(msg)
-            sys.exit(1)
-
-        if self.sf_optim_g and self.is_train:
-            self.optimizer_g.train()  # type: ignore[attr-defined]
-        if self.net_d is not None and self.sf_optim_d and self.is_train:
-            self.optimizer_d.train()  # type: ignore[attr-defined]
+        self._save_with_retry(save_dict, save_path, "model")
 
     @staticmethod
     def _reject_legacy_spectral_norm(
@@ -453,7 +484,7 @@ class base:
         if not Path(load_path).exists():
             msg = f"{tc.red}Path to model doesn't exist. Please check your configuration.{tc.end}"
             logger.error(msg)
-            sys.exit(0)
+            sys.exit(1)
 
         # Paired raw+EMA checkpoints contain two full parameter sets. Stage them
         # on CPU so resumption does not transiently require several model copies
@@ -500,10 +531,10 @@ class base:
 
         try:
             net.load_state_dict(load_net, strict=strict)
-        except:
+        except Exception:
             msg = f"{tc.red}Failed to load model. Please check scale and net parameters, or disable strict_load.{tc.end}"
             logger.exception(msg)
-            sys.exit(0)
+            sys.exit(1)
 
         torch.cuda.empty_cache()
         gc.collect()
@@ -539,7 +570,7 @@ class base:
                 rank_state_path = (
                     rank_state_dir / f"{int(current_iter)}.rank{rank}.state"
                 )
-                torch.save(rank_state, rank_state_path)
+                self._save_with_retry(rank_state, rank_state_path, "rank state")
                 torch.distributed.barrier()
             if rank != 0:
                 torch.distributed.barrier()
@@ -558,8 +589,11 @@ class base:
                 state["distributed_rank_states"] = True
             else:
                 state["rank_state"] = rank_state
-            for o in self.optimizers:
-                state["optimizers"].append(o.state_dict())  # type: ignore[attr-defined]
+            # Captured inside the context so the recorded train_mode matches the
+            # iterate save_network wrote; resume_training swaps both back.
+            with self.evaluation_weights():
+                for o in self.optimizers:
+                    state["optimizers"].append(o.state_dict())  # type: ignore[attr-defined]
             for s in self.schedulers:
                 state["schedulers"].append(s.state_dict())  # type: ignore[attr-defined]
             grad_scalers = {}
@@ -572,36 +606,7 @@ class base:
             save_filename = f"{int(current_iter)}.state"
             save_path = Path(self.opt["path"]["training_states"]) / save_filename
 
-            if self.sf_optim_g and self.is_train:
-                self.optimizer_g.eval()  # type: ignore[attr-defined]
-            if self.net_d is not None and self.sf_optim_d and self.is_train:
-                self.optimizer_d.eval()  # type: ignore[attr-defined]
-
-            # avoid occasional writing errors
-            retry = 3
-            logger = get_root_logger()
-            while retry > 0:
-                try:
-                    torch.save(state, save_path)
-                except OSError:
-                    logger.warning(
-                        f"{tc.red}Save training state error. Remaining retry times: {retry - 1}{tc.end}"
-                    )
-                    time.sleep(1)
-                else:
-                    break
-                finally:
-                    retry -= 1
-            if retry == 0:
-                logger.warning(f"Still cannot save {save_path}. Just ignore it.")
-                msg = f"{tc.red}Cannot save, aborting.{tc.end}"
-                logger.error(msg)
-                sys.exit(1)
-
-            if self.sf_optim_g and self.is_train:
-                self.optimizer_g.train()  # type: ignore[attr-defined]
-            if self.net_d is not None and self.sf_optim_d and self.is_train:
-                self.optimizer_d.train()  # type: ignore[attr-defined]
+            self._save_with_retry(state, save_path, "training state")
 
             if distributed:
                 torch.distributed.barrier()
@@ -629,6 +634,13 @@ class base:
             self.optimizers[i].load_state_dict(o)
         for i, s in enumerate(resume_schedulers):
             self.schedulers[i].load_state_dict(s)
+
+        # Checkpoints store the evaluation iterate; step() refuses to run until
+        # the schedule-free optimizers have swapped back to the training one.
+        if self.sf_optim_g:
+            self.optimizer_g.train()  # type: ignore[attr-defined]
+        if self.net_d is not None and self.sf_optim_d:
+            self.optimizer_d.train()  # type: ignore[attr-defined]
 
         resume_grad_scalers = resume_state.get("grad_scalers", {})
         for name, scaler_state in resume_grad_scalers.items():

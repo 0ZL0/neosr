@@ -44,6 +44,10 @@ class image(base):
 
         self.aug: tuple[str, ...] | None = None
         self.aug_prob: tuple[float, ...] | None = None
+        # Distinct from is_train, which says whether this is a training run at
+        # all. Overloading that one for the current phase silently disabled the
+        # schedule-free evaluation weights during validation.
+        self._validating = False
         if self.is_train:
             resolved_augment = resolve_augment_options(self.opt["datasets"]["train"])
             if resolved_augment is not None:
@@ -122,12 +126,12 @@ class image(base):
 
         # set nets to training mode
         self.net_g.train()  # type: ignore[reportAttributeAccessIssue,attr-defined]
-        if self.sf_optim_g and self.is_train:
+        if self.sf_optim_g:
             self.optimizer_g.train()  # type: ignore[attr-defined]
 
         if self.net_d is not None:
             self.net_d.train()  # type: ignore[reportArgumentType]
-            if self.sf_optim_d and self.is_train:
+            if self.sf_optim_d:
                 self.optimizer_d.train()  # type: ignore[attr-defined]
 
         # scale ratio var
@@ -426,7 +430,7 @@ class image(base):
             self.gt = data["gt"].to(self.device, non_blocking=True)  # type: ignore[union-attr]
 
         # augmentation
-        if self.is_train and self.aug is not None:
+        if self.is_train and not self._validating and self.aug is not None:
             self.gt, self.lq = apply_augment(
                 self.gt, self.lq, augs=self.aug, prob=self.aug_prob
             )
@@ -821,7 +825,7 @@ class image(base):
         self, dataloader, current_iter: int, tb_logger, save_img: bool = True
     ) -> None:
         # flag to not apply augmentation during val
-        self.is_train = False
+        self._validating = True
         dataset_name = dataloader.dataset.opt["name"]
         dataset_type = dataloader.dataset.opt["type"]
         # progress bar
@@ -856,19 +860,14 @@ class image(base):
                 if (hasattr(self, "ema") and self.ema > 0)
                 else self.net_g
             )
-            sf_mode = self.sf_optim_g and self.is_train
             # set eval mode
             model.eval()
-            if sf_mode:
-                self.optimizer_g.eval()
             # inference
             tile_opt = self.opt["val"].get("tile", -1)
-            with torch.inference_mode():
+            with self.evaluation_weights(), torch.inference_mode():
                 self.output = self.tile_val() if tile_opt != -1 else model(self.lq)
             # set train mode
             model.train()
-            if sf_mode:
-                self.optimizer_g.train()
 
             visuals = self.get_current_visuals()
             sr_img = tensor2img([visuals["result"]])
@@ -962,7 +961,7 @@ class image(base):
 
             self._log_validation_metric_values(current_iter, dataset_name, tb_logger)
 
-        self.is_train = True
+        self._validating = False
 
     def get_current_visuals(self) -> OrderedDict:
         out_dict = OrderedDict()
