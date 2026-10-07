@@ -174,7 +174,7 @@ class msswd_loss(nn.Module):
             y_single = color_space_transform(y_pyramid[n])
             swd = self.forward_once(x_single, y_single)
 
-        ms_swd = ms_swd + swd
+            ms_swd = ms_swd + swd
         ms_swd = ms_swd / self.num_scale
         # decrease magnitude to balance with other losses
         ms_swd = ms_swd.mean() * 0.1
