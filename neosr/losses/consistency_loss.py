@@ -136,7 +136,7 @@ class consistency_loss(nn.Module):
         # NOTE: will convert from range [0, 1] to range [0, 100]
         img = torch.where(
             img <= (216 / 24389),
-            img * (img * (24389 / 27)),
+            img * (24389 / 27),
             # torch workaround for cube-root in negative numbers
             img.sign() * img.abs().pow(1 / 3) * 116 - 16,
         )
