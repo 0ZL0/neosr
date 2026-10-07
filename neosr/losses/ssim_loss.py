@@ -148,15 +148,15 @@ class mssim_loss(nn.Module):
         ms_components = []
         for i, w in enumerate((0.0448, 0.2856, 0.3001, 0.2363, 0.1333)):
             ssim, cs = self._ssim(x, y)
-            ssim = ssim.mean()
-            cs = cs.mean()
+            component = (ssim if i == 4 else cs).mean(dim=(-2, -1))
+            nonpositive = component <= 0
+            # Avoid the singular derivative of fractional powers at zero.
+            powered = component.masked_fill(nonpositive, 1).pow(w)
+            ms_components.append(powered.masked_fill(nonpositive, 0))
 
-            if i == 4:
-                ms_components.append(ssim**w)
-            else:
-                ms_components.append(cs**w)
+            if i < 4:
                 padding = [s % 2 for s in x.shape[2:]]  # spatial padding
                 x = F.avg_pool2d(x, kernel_size=2, stride=2, padding=padding)
                 y = F.avg_pool2d(y, kernel_size=2, stride=2, padding=padding)
 
-        return math.prod(ms_components)  # equ 7 in ref2
+        return math.prod(ms_components).mean()  # equ 7 in ref2
