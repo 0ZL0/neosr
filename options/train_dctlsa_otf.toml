@@ -102,8 +102,6 @@ type = "metagan"
 
 [train]
 ema = 0.999
-#sam = "fsam"
-#sam_init = 1000
 #eco = true
 #eco_init = 15000
 #wavelet_guided = true

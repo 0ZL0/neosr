@@ -25,13 +25,10 @@ from neosr.models.training_utils import (
     grad_scaler_step_succeeded,
     normalize_accumulation_steps,
 )
-from neosr.optimizers import adamw_sf, adan, adan_sf, fsam, soap_sf
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
 from neosr.utils.registry import MODEL_REGISTRY
 
 if TYPE_CHECKING:
-    from torch.optim.optimizer import Optimizer
-
     from neosr.utils.namespaces import ResolvedLossType
 
 
@@ -114,10 +111,6 @@ class image(base):
                 )
             if self.opt["path"].get("resume_state") is not None:
                 self._load_resume_ema_networks()
-
-        # sharpness-aware minimization
-        self.sam = self.opt["train"].get("sam", None)
-        self.sam_init = self.opt["train"].get("sam_init", -1)
 
         # set up optimizers and schedulers
         self.setup_optimizers()
@@ -216,10 +209,6 @@ class image(base):
         # inference clamp
         self.clamp = self.opt["train"].get("clamp", True)
 
-        # log sam
-        if self.sam is not None:
-            logger.info("Sharpness-Aware Minimization enabled.")
-
         # log eco
         if self.eco:
             logger.info("ECO enabled.")
@@ -235,16 +224,6 @@ class image(base):
             for loss_entry in self.loss_entries
         )
 
-        if self.sam is not None and self.use_amp is True:
-            # Closure not supported:
-            # https://github.com/pytorch/pytorch/blob/main/torch/amp/grad_scaler.py#L384
-            msg = f"""{tc.light_yellow}SAM does not support GradScaler. As a result, AMP could cause
-                      instability with it. Disable AMP if you get undesirable results.{tc.end}"""
-            logger.warning(msg)
-        if self.sam is not None and self.accum_iters > 1:
-            msg = f"{tc.red}SAM can't be used with gradient accumulation yet.{tc.end}"
-            logger.error(msg)
-            sys.exit(1)
         if pix_losses_bool is False and percep_losses_bool is False:
             msg = f"{tc.red}Both pixel/mssim and perceptual losses are None. Please enable at least one.{tc.end}"
             logger.error(msg)
@@ -361,40 +340,6 @@ class image(base):
         )
         self.optimizers.append(self.optimizer_g)
 
-        # SAM
-        if self.sam is not None:
-            if optim_type in {"AdamW", "adamw"}:
-                base_optimizer: type[Optimizer] = torch.optim.AdamW  # type: ignore[reportPrivateImportUsage]
-            elif optim_type in {"Adan", "adan"}:
-                base_optimizer = adan
-            elif optim_type in {"AdamW_SF", "adamw_sf"}:
-                base_optimizer = adamw_sf
-            elif optim_type in {"Adan_SF", "adan_sf"}:
-                base_optimizer = adan_sf
-            elif optim_type in {"SOAP_SF", "soap_sf"}:
-                base_optimizer = soap_sf
-            else:
-                msg = (
-                    f"{tc.red}SAM not supported by optimizer {optim_type} yet.{tc.end}"
-                )
-                logger.error(msg)
-                sys.exit(1)
-
-            if self.sam in {"FSAM", "fsam"}:
-                self.sam_optimizer_g = fsam(
-                    optim_params,
-                    base_optimizer,
-                    rho=0.5,
-                    sigma=1,
-                    lmbda=0.9,
-                    adaptive=True,
-                    **train_opt["optim_g"],
-                )
-            elif self.sam is not None:
-                msg = f"{tc.red}SAM type {self.sam} not supported yet.{tc.end}"
-                logger.error(msg)
-                sys.exit(1)
-
         # optimizer d
         if self.net_d is not None:
             optim_type = train_opt["optim_d"].pop("type")
@@ -489,7 +434,7 @@ class image(base):
             self.log_dict = self.reduce_loss_dict(effective_batch_logs)
             self._accumulated_log_dict.clear()
 
-    def closure(self, current_iter: int, *, should_step: bool = True):
+    def _forward_backward(self, current_iter: int, *, should_step: bool = True):
         if self.net_d is not None:
             for p in self.net_d.parameters():  # type: ignore[reportAttributeAccessIssue,operator]
                 p.requires_grad = False
@@ -566,16 +511,9 @@ class image(base):
         scaled_g_total = l_g_total / self.accum_iters
 
         # backward generator
-        if self.sam and current_iter >= self.sam_init:
-            scaled_g_total.backward()
-        else:
-            self.gradscaler_g.scale(scaled_g_total).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        self.gradscaler_g.scale(scaled_g_total).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
-        if (
-            should_step
-            and self.gradclip
-            and not (self.sam is not None and current_iter >= self.sam_init)
-        ):
+        if should_step and self.gradclip:
             # gradient clipping on generator
             self.gradscaler_g.unscale_(self.optimizer_g)  # type: ignore[reportFunctionMemberAccess,attr-defined]
             torch.nn.utils.clip_grad_norm_(
@@ -624,19 +562,11 @@ class image(base):
                     loss_dict["l_d_total"] = (l_d_real + l_d_fake) / 2
 
                     # backward discriminator
-                    if self.sam and current_iter >= self.sam_init:
-                        scaled_d_real.backward()
-                        scaled_d_fake.backward()
-                    else:
-                        self.gradscaler_d.scale(scaled_d_real).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                        self.gradscaler_d.scale(scaled_d_fake).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                    self.gradscaler_d.scale(scaled_d_real).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                    self.gradscaler_d.scale(scaled_d_fake).backward()  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
             # clip discriminator
-            if (
-                should_step
-                and self.gradclip
-                and not (self.sam is not None and current_iter >= self.sam_init)
-            ):
+            if should_step and self.gradclip:
                 # gradient clipping on discriminator
                 self.gradscaler_d.unscale_(self.optimizer_d)  # type: ignore[reportFunctionMemberAccess,attr-defined]
                 torch.nn.utils.clip_grad_norm_(
@@ -672,71 +602,50 @@ class image(base):
         with accumulation_sync_context(
             (self.net_g, self.net_d), should_sync=should_sync
         ):
-            self.closure(current_iter, should_step=should_step)
+            self._forward_backward(current_iter, should_step=should_step)
         self.n_accumulated = next_accumulated
 
         if not should_step:
             return False
 
-        sam_active = bool(self.sam and current_iter >= self.sam_init)
-        generator_scale = (
-            None if sam_active else self.gradscaler_g.get_scale()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-        )
+        generator_scale = self.gradscaler_g.get_scale()  # type: ignore[reportFunctionMemberAccess,attr-defined]
         discriminator_scale = (
             self.gradscaler_d.get_scale()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-            if self.net_d is not None and not sam_active
+            if self.net_d is not None
             else None
         )
 
         # step() for generator
-        if sam_active:
-            self.sam_optimizer_g.step(self.closure, current_iter)
-        else:
-            self.gradscaler_g.step(self.optimizer_g)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        self.gradscaler_g.step(self.optimizer_g)  # type: ignore[reportFunctionMemberAccess,attr-defined]
         # step() for discriminator
         if self.net_d is not None:
-            if sam_active:
-                self.optimizer_d.step()
-            else:
-                self.gradscaler_d.step(self.optimizer_d)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            self.gradscaler_d.step(self.optimizer_d)  # type: ignore[reportFunctionMemberAccess,attr-defined]
 
         # zero generator grads
-        if sam_active:
-            self.sam_optimizer_g.zero_grad(set_to_none=True)
-        else:
-            # update gradscaler once after the effective batch is complete
-            self.gradscaler_g.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-            if self.net_d is not None:
-                self.gradscaler_d.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
-            self.optimizer_g.zero_grad(set_to_none=True)
+        # update gradscaler once after the effective batch is complete
+        self.gradscaler_g.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        if self.net_d is not None:
+            self.gradscaler_d.update()  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        self.optimizer_g.zero_grad(set_to_none=True)
 
         # zero discriminator grads
         if self.net_d is not None:
             self.optimizer_d.zero_grad(set_to_none=True)
 
-        if sam_active:
-            generator_step_succeeded = True
-        else:
-            if generator_scale is None:
-                msg = "Generator GradScaler state was not captured before stepping."
-                raise RuntimeError(msg)
-            generator_step_succeeded = grad_scaler_step_succeeded(
-                generator_scale,
-                self.gradscaler_g.get_scale(),  # type: ignore[reportFunctionMemberAccess,attr-defined]
-            )
+        generator_step_succeeded = grad_scaler_step_succeeded(
+            generator_scale,
+            self.gradscaler_g.get_scale(),  # type: ignore[reportFunctionMemberAccess,attr-defined]
+        )
         self.optimizer_step_succeeded = [generator_step_succeeded]
         discriminator_step_succeeded = False
         if self.net_d is not None:
-            if sam_active:
-                discriminator_step_succeeded = True
-            else:
-                if discriminator_scale is None:
-                    msg = "Discriminator GradScaler state was not captured before stepping."
-                    raise RuntimeError(msg)
-                discriminator_step_succeeded = grad_scaler_step_succeeded(
-                    discriminator_scale,
-                    self.gradscaler_d.get_scale(),  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                )
+            if discriminator_scale is None:
+                msg = "Discriminator GradScaler state was not captured before stepping."
+                raise RuntimeError(msg)
+            discriminator_step_succeeded = grad_scaler_step_succeeded(
+                discriminator_scale,
+                self.gradscaler_d.get_scale(),  # type: ignore[reportFunctionMemberAccess,attr-defined]
+            )
             self.optimizer_step_succeeded.append(discriminator_step_succeeded)
 
         if self.ema > 0:
