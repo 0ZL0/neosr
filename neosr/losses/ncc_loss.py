@@ -18,20 +18,25 @@ class ncc_loss(nn.Module):
         self.loss_weight = loss_weight
 
     def _cc(self, net_output: Tensor, gt: Tensor):
-        # reshape
-        net_output_reshaped = net_output.view(net_output.shape[1], -1)
-        gt_reshaped = gt.view(gt.shape[1], -1)
-        # calculate mean
-        mean_net_output = torch.mean(net_output_reshaped, 1).unsqueeze(1)
-        mean_gt = torch.mean(gt_reshaped, 1).unsqueeze(1)
-        # cross-correlation
-        cc = torch.sum(
-            (net_output_reshaped - mean_net_output) * (gt_reshaped - mean_gt), 1
-        ) / torch.sqrt(
-            torch.sum((net_output_reshaped - mean_net_output) ** 2, 1)
-            * torch.sum((gt_reshaped - mean_gt) ** 2, 1)
-        )
-        return torch.mean(cc)
+        if net_output.ndim != 4 or net_output.shape != gt.shape:
+            msg = "NCC expects prediction and GT with the same NCHW shape."
+            raise ValueError(msg)
+
+        # Accumulate low-precision inputs in FP32 while preserving FP64.
+        dtype = torch.promote_types(net_output.dtype, gt.dtype)
+        if dtype in (torch.float16, torch.bfloat16):
+            dtype = torch.float32
+        x = net_output.to(dtype=dtype).flatten(2)
+        y = gt.to(dtype=dtype).flatten(2)
+        x = x - x.mean(dim=-1, keepdim=True)
+        y = y - y.mean(dim=-1, keepdim=True)
+
+        # Floor spatial mean variances before sqrt for finite backward at zero.
+        # For [0, 1] images, 1e-8 corresponds to a standard deviation of 1e-4.
+        sx = x.square().mean(dim=-1).clamp_min(1e-8).sqrt()
+        sy = y.square().mean(dim=-1).clamp_min(1e-8).sqrt()
+        cc = (x * y).mean(dim=-1) / sx / sy
+        return cc.clamp(-1, 1).mean()
 
     def forward(self, net_output: Tensor, gt: Tensor):
         cc_value = self._cc(net_output, gt)
