@@ -1,5 +1,5 @@
 from collections import OrderedDict
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor, nn
@@ -25,28 +25,18 @@ class PatchesKernel3D(nn.Module):
         self, kernelsize: int, kernelstride: int, kernelpadding: int = 0
     ) -> None:
         super().__init__()
-        kernel = (
-            torch.eye(kernelsize**2)
-            .view(kernelsize**2, 1, kernelsize, kernelsize)
-            .clone()
-            .detach()
-        )
-        self.weight = nn.Parameter(data=kernel, requires_grad=False)
-        self.bias = nn.Parameter(torch.zeros(kernelsize**2), requires_grad=False)
         self.kernelsize = kernelsize
         self.stride = kernelstride
         self.padding = kernelpadding
 
-    @torch.amp.custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(self, x: Tensor) -> Tensor:
         batchsize = x.shape[0]
         channels = x.shape[1]
         x = x.reshape(batchsize * channels, x.shape[-2], x.shape[-1]).unsqueeze(1)
-        with torch.no_grad():
-            x = F.conv2d(x, self.weight, self.bias, self.stride, self.padding)
+        x = F.unfold(x, self.kernelsize, padding=self.padding, stride=self.stride)
 
         return (
-            x.permute(0, 2, 3, 1)
+            x.transpose(1, 2)
             .reshape(batchsize, channels, -1, self.kernelsize**2)
             .permute(0, 2, 1, 3)
         )
@@ -74,7 +64,7 @@ class vgg_perceptual_loss(nn.Module):
         criterion (str): Criterion used for perceptual loss. Default: 'huber'.
         patchloss (bool): Enables PatchLoss. Default: False.
         ipk (bool): Enables Image Patch Kernel and adds to the final loss. Default: False.
-        patch_weight (float): Weight of PatchLoss. Default: 1.0
+        patch_weight (float): Feature patch weight (kappa in Eq. 18). Default: 1.0.
 
     """
 
@@ -145,39 +135,58 @@ class vgg_perceptual_loss(nn.Module):
             msg = f"{criterion} criterion not supported."
             raise NotImplementedError(msg)
 
-    @torch.no_grad()
-    @torch.amp.custom_fwd(cast_inputs=torch.float32, device_type="cuda")
-    def patch(self, x: Tensor, gt: Tensor, is_ipk: bool = False) -> float:
-        """Args:
-        ----
-            is_ipk (bool): defines if it's IPK (Image Patch Kernel)
-            or FPK (Feature Patch Kernel). Default: False.
+    def patch(self, x: Tensor, gt: Tensor, is_ipk: bool = False) -> Tensor:
+        """Multi-scale cosine distance with per-image attention (paper Eqs. 15-18).
 
+        The authors' code uses unnormalized std weights; here each scale's
+        weights sum to one over the image's spatial patches and channels,
+        or zero for a textureless image.
         """
-        loss = 0.0
         kernels = self.ipk_kernels if is_ipk else self.perceptual_kernels
-
-        for _kernel in kernels:
-            patchkernel3d = PatchesKernel3D(_kernel, _kernel // 2).to(
-                x.device, non_blocking=True
-            )  # create instance
-            x_trans = patchkernel3d(x)
-            gt_trans = patchkernel3d(gt)
-            x_trans = x_trans.reshape(-1, x_trans.shape[-1])
-            gt_trans = gt_trans.reshape(-1, gt_trans.shape[-1])
-
+        # Keep reductions out of autocast, including on CPU, and preserve FP64.
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            dtype = torch.promote_types(x.dtype, gt.dtype)
+            if dtype in (torch.float16, torch.bfloat16):
+                dtype = torch.float32
+            x = x.to(dtype=dtype)
+            gt = gt.detach().to(dtype=dtype)
+            target = gt  # The reference computes IPK attention before clipping.
             if is_ipk:
-                x_trans = torch.clamp(x_trans, 0.000001, 0.999999)
-                gt_trans = torch.clamp(gt_trans, 0.000001, 0.999999)
+                x = x.clamp(1e-6, 0.999999)
+                gt = gt.clamp(1e-6, 0.999999)
 
-            dot_x_y = torch.einsum("ik,ik->i", x_trans, gt_trans)
-            dy = torch.std(gt_trans, dim=1)
-            cosine_x_y = torch.div(
-                torch.div(dot_x_y, torch.sqrt(torch.sum(x_trans**2, dim=1))),
-                torch.sqrt(torch.sum(gt_trans**2, dim=1)),
-            )
-            cosine_x_y_d = torch.mul((1 - cosine_x_y), dy)  # y = (1-x)dy
-            loss = loss + cast("float", torch.mean(cosine_x_y_d))
+            loss = x.new_zeros(())
+            for kernel in kernels:
+                # Match the reference implementation's IPK and FPK sampling.
+                stride = kernel // 2 + int(is_ipk)
+                with torch.no_grad():
+                    patches = target.unfold(2, kernel, stride).unfold(3, kernel, stride)
+                    # Stable sample std; raw second moments lose low contrast.
+                    weights = patches.std(dim=(-2, -1), correction=1)
+                    # Do not normalize constant-patch roundoff into attention.
+                    varying = patches.amax(dim=(-2, -1)) > patches.amin(dim=(-2, -1))
+                    weights = weights * varying
+                    total = weights.sum(dim=(1, 2, 3), keepdim=True)
+                    # A textureless image has no attention and contributes zero.
+                    weights = weights / torch.where(total > 0, total, 1)
+
+                # Sufficient statistics avoid materializing prediction patches.
+                # A 1e-4 norm floor extends cosine to zero-norm patches; clamp
+                # before sqrt so backward never evaluates sqrt'(0).
+                norm_floor2 = 1e-8
+                x_norm = (
+                    (F.avg_pool2d(x.square(), kernel, stride) * kernel**2)
+                    .clamp_min(norm_floor2)
+                    .sqrt()
+                )
+                gt_norm = (
+                    (F.avg_pool2d(gt.square(), kernel, stride) * kernel**2)
+                    .clamp_min(norm_floor2)
+                    .sqrt()
+                )
+                dot = F.avg_pool2d(x * gt, kernel, stride) * kernel**2
+                distance = 1 - dot / x_norm / gt_norm
+                loss = loss + (weights * distance).sum(dim=(1, 2, 3)).mean()
 
         return loss
 
